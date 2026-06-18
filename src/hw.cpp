@@ -15,9 +15,11 @@
 #include "bn_keypad.h"
 #include "bn_optional.h"
 #include "bn_sprite_ptr.h"
+#include "bn_regular_bg_ptr.h"
 #include "bn_bg_palettes.h"
 
 #include "bn_sprite_items_hero.h"
+#include "bn_regular_bg_items_scene_bg.h"
 
 namespace
 {
@@ -35,6 +37,7 @@ namespace
 
     Actor actors[MAX_ACTORS];
     bool sprites_hidden = false;
+    bn::optional<bn::regular_bg_ptr> scene_bg;   // the start scene's background
 
     // subpixel world coords -> Butano screen-centered pixel coords (0,0 == screen center)
     bn::fixed to_screen_x(uint16_t sx) { return bn::fixed(int(sx) / SUBPX) - 120; }
@@ -43,9 +46,10 @@ namespace
 
 void hw_init(void)
 {
-    // Distinct dark-blue backdrop so the magenta sprite stands out for verification.
     bn::bg_palettes::set_transparent_color(bn::color(2, 4, 12));
-    // Actors are now activated/positioned by the VM script (increment 5b).
+    // Load the start scene's background (GBA Studio's asset pipeline writes it to
+    // graphics/scene_bg.bmp). Centred: the 256x256 bg shows its middle 240x160.
+    scene_bg = bn::regular_bg_items::scene_bg.create_bg(0, 0);
 }
 
 void hw_render(void)
