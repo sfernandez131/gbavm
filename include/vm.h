@@ -152,6 +152,8 @@ UBYTE script_terminate(UBYTE ID);
 UBYTE script_runner_update(void);
 // execute a single instruction in the given context; returns 0 at VM_OP_STOP
 UBYTE VM_STEP(SCRIPT_CTX * THIS);
+// resolve a VM operand index to a pointer (used by the hardware bridge, hw.cpp)
+void * vm_resolve_ref(SCRIPT_CTX * THIS, INT16 idx);
 
 #ifdef __cplusplus
 }
