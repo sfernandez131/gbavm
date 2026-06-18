@@ -133,6 +133,15 @@ void hw_actor_get_pos(uint16_t* pos)
     if(id >= 0 && id < MAX_ACTORS) { pos[1] = actors[id].x; pos[2] = actors[id].y; }
 }
 
+void hw_actor_get_angle(uint16_t* params, int16_t* dest)
+{
+    // dir encoding (see hw_actor_set_pos): 0=down,1=right,2=up,3=left.
+    // GB Studio BRADS angles (clockwise, 256/turn, 0=up): up=0,right=64,down=128,left=192.
+    static const uint8_t dir_angle_lookup[4] = { 128, 64, 0, 192 };
+    int id = int16_t(params[0]);
+    if(id >= 0 && id < MAX_ACTORS) *dest = dir_angle_lookup[actors[id].dir & 3];
+}
+
 void hw_input_get(uint16_t* dst, uint8_t joyid)
 {
     (void)joyid;

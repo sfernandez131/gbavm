@@ -142,6 +142,8 @@ extern UWORD sys_time;
 #define RUNNER_BUSY      2
 #define RUNNER_EXCEPTION 3
 
+// seed the VM PRNG at boot (GBA has no DIV register; pass a hardware-timer value)
+void vm_boot_seed(UWORD seed);
 // initialize / reset the script runner contexts
 void script_runner_init(UBYTE reset);
 // start a script in a newly allocated context

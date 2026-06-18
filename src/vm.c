@@ -55,16 +55,13 @@ void * vm_resolve_ref(SCRIPT_CTX * THIS, INT16 idx) { return VM_REF_TO_PTR(idx);
 
 // ---- local math helpers (replacements for GBDK's math.h / rand.h) -------------
 
-static UWORD vm_rng_state = 0x1234;
-static void  vm_initrand(UWORD seed) { vm_rng_state = seed ? seed : 1u; }
-static UWORD vm_randw(void) {
-    UWORD x = vm_rng_state;          // xorshift16 (TODO: match GB Studio's PRNG sequence)
-    x ^= (UWORD)(x << 7);
-    x ^= (UWORD)(x >> 9);
-    x ^= (UWORD)(x << 8);
-    vm_rng_state = x;
-    return x;
-}
+// PRNG ported byte-for-byte from GBDK sm83.lib rand.o (the sequence GB Studio uses):
+// new = old*17 + 0x5C93 (mod 2^16); returns the post-update state.
+static UWORD vm_rng_state = 0;
+static void  vm_initrand(UWORD seed) { vm_rng_state = seed; }
+static UWORD vm_randw(void) { vm_rng_state = (UWORD)(vm_rng_state * 17u + 0x5C93u); return vm_rng_state; }
+// Boot-time seed hook (GBA has no DIV register; main.cpp seeds from a hardware timer).
+void vm_boot_seed(UWORD s) { vm_initrand(s); }
 static UWORD vm_isqrt(UWORD x) {
     UWORD res = 0, bit = (UWORD)1 << 14;
     while (bit > x) bit >>= 2;
@@ -75,7 +72,61 @@ static UWORD vm_isqrt(UWORD x) {
     }
     return res;
 }
-static WORD vm_atan2(WORD y, WORD x) { (void)y; (void)x; return 0; /* TODO: integer atan2 */ }
+// Sine table + SIN/COS + scale ops, ported verbatim from GB Studio
+// (appData/engine/gbvm/include/sincos.h + src/core/vm_math.c). Angle is 8-bit BRADS.
+static const INT8 sine_wave[256] = {
+0,3,6,9,12,16,19,22,25,28,31,34,37,40,43,46,49,51,54,57,60,63,65,68,71,73,76,78,81,83,85,88,
+90,92,94,96,98,100,102,104,106,107,109,111,112,113,115,116,117,118,120,121,122,122,123,124,125,125,126,126,126,127,127,127,
+127,127,127,127,126,126,126,125,125,124,123,122,122,121,120,118,117,116,115,113,112,111,109,107,106,104,102,100,98,96,94,92,
+90,88,85,83,81,78,76,73,71,68,65,63,60,57,54,51,49,46,43,40,37,34,31,28,25,22,19,16,12,9,6,3,
+0,-3,-6,-9,-12,-16,-19,-22,-25,-28,-31,-34,-37,-40,-43,-46,-49,-51,-54,-57,-60,-63,-65,-68,-71,-73,-76,-78,-81,-83,-85,-88,
+-90,-92,-94,-96,-98,-100,-102,-104,-106,-107,-109,-111,-112,-113,-115,-116,-117,-118,-120,-121,-122,-122,-123,-124,-125,-125,-126,-126,-126,-127,-127,-127,
+-127,-127,-127,-127,-126,-126,-126,-125,-125,-124,-123,-122,-122,-121,-120,-118,-117,-116,-115,-113,-112,-111,-109,-107,-106,-104,-102,-100,-98,-96,-94,-92,
+-90,-88,-85,-83,-81,-78,-76,-73,-71,-68,-65,-63,-60,-57,-54,-51,-49,-46,-43,-40,-37,-34,-31,-28,-25,-22,-19,-16,-12,-9,-6,-3};
+static inline INT8 SIN(UBYTE a){ return sine_wave[a]; }
+static inline INT8 COS(UBYTE a){ return sine_wave[(UBYTE)(a + 64u)]; }
+static void vm_sin_scale(SCRIPT_CTX * THIS, INT16 idx, INT16 idx_angle, UBYTE accuracy) {
+    INT16 * res = I16P(idx); INT16 * angle = I16P(idx_angle);
+    *res = (INT16)((*res * (SIN((UBYTE)*angle) >> (7 - accuracy))) >> accuracy);
+}
+static void vm_cos_scale(SCRIPT_CTX * THIS, INT16 idx, INT16 idx_angle, UBYTE accuracy) {
+    INT16 * res = I16P(idx); INT16 * angle = I16P(idx_angle);
+    *res = (INT16)((*res * (COS((UBYTE)*angle) >> (7 - accuracy))) >> accuracy);
+}
+
+// atan2 ported from GB Studio (src/core/math_atan2.c): CLAMP + quadrant table.
+// Returns an 8-bit BRADS angle (0..255); the UBYTE intermediate gives GB's wrap.
+static const UBYTE atan2_table[20][18] = {
+{64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64},
+{0,32,45,51,54,56,57,58,59,59,60,60,61,61,61,61,61,62},
+{0,19,32,40,45,48,51,53,54,55,56,57,57,58,58,59,59,59},
+{0,13,24,32,38,42,45,48,49,51,52,53,54,55,55,56,56,57},
+{0,10,19,26,32,37,40,43,45,47,48,50,51,52,53,53,54,55},
+{0,8,16,22,27,32,36,39,41,43,45,47,48,49,50,51,52,52},
+{0,7,13,19,24,28,32,35,38,40,42,44,45,46,48,48,49,50},
+{0,6,11,16,21,25,29,32,35,37,39,41,42,44,45,46,47,48},
+{0,5,10,15,19,23,26,29,32,34,37,38,40,42,43,44,45,46},
+{0,5,9,13,17,21,24,27,30,32,34,36,38,39,41,42,43,44},
+{0,4,8,12,16,19,22,25,27,30,32,34,36,37,39,40,41,42},
+{0,4,7,11,14,17,20,23,26,28,30,32,34,35,37,38,39,41},
+{0,3,7,10,13,16,19,22,24,26,28,30,32,34,35,37,38,39},
+{0,3,6,9,12,15,18,20,22,25,27,29,30,32,34,35,36,37},
+{0,3,6,9,11,14,16,19,21,23,25,27,29,30,32,33,35,36},
+{0,3,5,8,11,13,16,18,20,22,24,26,27,29,31,32,33,35},
+{0,3,5,8,10,12,15,17,19,21,23,25,26,28,29,31,32,33},
+{0,2,5,7,9,12,14,16,18,20,22,23,25,27,28,29,31,32},
+{0,2,5,7,9,11,13,15,17,19,21,22,24,25,27,28,30,31},
+{0,2,4,6,8,10,12,14,16,18,20,21,23,24,26,27,29,30}};
+#define ATAN2_CLAMP(v,lo,hi) ((v)<(lo)?(lo):((v)>(hi)?(hi):(v)))
+static WORD vm_atan2(WORD y, WORD x) {
+    x = ATAN2_CLAMP(x,-19,19); y = ATAN2_CLAMP(y,-17,17);
+    UBYTE r;
+    if (x>=0 && y<=0)      r = (UBYTE)(64  - atan2_table[x][-y]);
+    else if (x>=0 && y>=0) r = (UBYTE)(64  + atan2_table[x][y]);
+    else if (x<=0 && y>=0) r = (UBYTE)(192 - atan2_table[-x][y]);
+    else                   r = (UBYTE)(192 + atan2_table[-x][-y]);
+    return (WORD)r;
+}
 
 // alignment-safe little-endian reads from the (byte-aligned) bytecode stream
 static inline INT16 rd_i16(const UBYTE * p) { return (INT16)((UWORD)p[0] | ((UWORD)p[1] << 8)); }
@@ -414,6 +465,8 @@ static const UBYTE vm_args_len[256] = {
     [0x29]=4, [0x2A]=1, [0x2B]=2, [0x2C]=2, [0x2D]=5, [0x76]=6, [0x77]=6,
     // hardware opcodes (Task 5)
     [0x31]=2, [0x33]=2, [0x35]=2, [0x3A]=2, [0x51]=1, [0x54]=3,
+    // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
+    [0x86]=4, [0x89]=5, [0x8A]=5,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
     [0x57]=1, [0x5D]=1,
 };
@@ -484,6 +537,10 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x3A: hw_actor_get_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
+        // trig + actor-angle opcodes (P0)
+        case 0x86: hw_actor_get_angle((uint16_t *)vm_resolve_ref(THIS, A_I16(0)), (int16_t *)vm_resolve_ref(THIS, A_I16(2))); break;
+        case 0x89: vm_sin_scale(THIS, A_I16(0), A_I16(2), A_U8(4)); break;
+        case 0x8A: vm_cos_scale(THIS, A_I16(0), A_I16(2), A_U8(4)); break;
         // scene-boot opcodes the editor emits that have no GBA effect yet:
         case 0x57: /* VM_FADE: gbavm has no fade transition; the screen is always shown */ break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
