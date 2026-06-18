@@ -414,6 +414,8 @@ static const UBYTE vm_args_len[256] = {
     [0x29]=4, [0x2A]=1, [0x2B]=2, [0x2C]=2, [0x2D]=5, [0x76]=6, [0x77]=6,
     // hardware opcodes (Task 5)
     [0x31]=2, [0x33]=2, [0x35]=2, [0x3A]=2, [0x51]=1, [0x54]=3,
+    // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
+    [0x57]=1, [0x5D]=1,
 };
 
 // little-endian fixed-argument readers
@@ -475,12 +477,16 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x2A: vm_test_terminate(THIS, A_U8(0)); break;
         case 0x2D: vm_call_native(THIS, A_U8(0), A_PTR(1)); break;
         // hardware opcodes (Task 5) -> Butano via hw.cpp
-        case 0x31: hw_actor_activate(A_I16(0)); break;
-        case 0x33: hw_actor_deactivate(A_I16(0)); break;
+        // operand is a variable index holding the actor number (GB Studio semantics)
+        case 0x31: hw_actor_activate(*(INT16 *)vm_resolve_ref(THIS, A_I16(0))); break;
+        case 0x33: hw_actor_deactivate(*(INT16 *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x35: hw_actor_set_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x3A: hw_actor_get_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
+        // scene-boot opcodes the editor emits that have no GBA effect yet:
+        case 0x57: /* VM_FADE: gbavm has no fade transition; the screen is always shown */ break;
+        case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
         default:
             // remaining opcodes (other hardware commands, vm_asm) not implemented yet
             vm_last_unimplemented_op = op;
