@@ -133,6 +133,7 @@ static UBYTE vm_compare(UBYTE condition, INT16 A, INT16 B) {
         case VM_OP_GT: return A >  B;
         case VM_OP_GE: return A >= B;
         case VM_OP_NE: return A != B;
+        default:       break;
     }
     return FALSE;
 }
@@ -170,11 +171,15 @@ static void vm_invoke(SCRIPT_CTX * THIS, UBYTE bank, UBYTE * fn, UBYTE nparams, 
     (void)bank;
     UWORD * stack_frame = U16P(idx);
     UBYTE start = (THIS->update_fn != (void *)fn) ? (THIS->update_fn = (void *)fn, (UBYTE)TRUE) : (UBYTE)FALSE;
+    // Calling a handler whose address arrived as data is intentional in a bytecode VM.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     if (((SCRIPT_UPDATE_FN)(void *)fn)(THIS, start, stack_frame)) {
         if (nparams) THIS->stack_ptr -= nparams;
         THIS->update_fn = 0;
         return;
     }
+#pragma GCC diagnostic pop
     THIS->PC -= (INSTRUCTION_SIZE + 8);   // re-execute next quant (1 + args_len(invoke)=8)
 }
 
@@ -186,7 +191,11 @@ static void vm_get_far(SCRIPT_CTX * THIS, INT16 idxA, UBYTE size, UBYTE bank, UB
 
 static void vm_call_native(SCRIPT_CTX * THIS, UBYTE bank, const void * ptr) {
     (void)bank;
+    // Native handler address arrives as a data pointer; the cast is intentional.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     ((void (*)(SCRIPT_CTX *))ptr)(THIS);
+#pragma GCC diagnostic pop
 }
 
 static void vm_rate_limit_const(SCRIPT_CTX * THIS, UWORD n_frames, INT16 idxA, UBYTE * pc) {
