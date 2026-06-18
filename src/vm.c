@@ -1,3 +1,9 @@
+// gbavm - GBA Studio engine
+// Copyright (c) 2026 Scott Fernandez
+//
+// Portions of this file are derived from GBVM (https://github.com/chrismaltby/gbvm),
+// Copyright (c) 2020 Toxa, used under the MIT License. See the LICENSE file.
+//
 // gbavm VM core implementation - ported from GB Studio's GBVM src/core/vm.c.
 //
 // Faithful port of the system opcodes (data, arithmetic, control flow) and the

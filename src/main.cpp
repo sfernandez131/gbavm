@@ -1,4 +1,6 @@
 // gbavm - GBA Studio engine
+// Copyright (c) 2026 Scott Fernandez
+// MIT License - see the LICENSE file.
 //
 // Slice 2 milestone (Task 4): exercise the ported control-flow opcodes on GBA.
 // The hand-assembled script runs a counting LOOP (conditional 32-bit jump via
