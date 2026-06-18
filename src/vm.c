@@ -24,6 +24,7 @@
 #include <stdint.h>
 
 #include "vm.h"
+#include "hw.h"
 
 // ---- shared state -------------------------------------------------------------
 
@@ -48,6 +49,9 @@ UWORD sys_time = 0;
 // Resolve operand index to a typed pointer (negative = stack-relative, positive = global).
 #define I16P(idx) ((INT16 *)(((idx) < 0) ? THIS->stack_ptr + (idx) : script_memory + (idx)))
 #define U16P(idx) ((UWORD *)(((idx) < 0) ? THIS->stack_ptr + (idx) : script_memory + (idx)))
+
+// Resolve a VM operand index to a pointer (used by the hardware bridge in hw.cpp).
+void * vm_resolve_ref(SCRIPT_CTX * THIS, INT16 idx) { return VM_REF_TO_PTR(idx); }
 
 // ---- local math helpers (replacements for GBDK's math.h / rand.h) -------------
 
@@ -129,6 +133,7 @@ static UBYTE vm_compare(UBYTE condition, INT16 A, INT16 B) {
         case VM_OP_GT: return A >  B;
         case VM_OP_GE: return A >= B;
         case VM_OP_NE: return A != B;
+        default:       break;
     }
     return FALSE;
 }
@@ -166,11 +171,15 @@ static void vm_invoke(SCRIPT_CTX * THIS, UBYTE bank, UBYTE * fn, UBYTE nparams, 
     (void)bank;
     UWORD * stack_frame = U16P(idx);
     UBYTE start = (THIS->update_fn != (void *)fn) ? (THIS->update_fn = (void *)fn, (UBYTE)TRUE) : (UBYTE)FALSE;
+    // Calling a handler whose address arrived as data is intentional in a bytecode VM.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     if (((SCRIPT_UPDATE_FN)(void *)fn)(THIS, start, stack_frame)) {
         if (nparams) THIS->stack_ptr -= nparams;
         THIS->update_fn = 0;
         return;
     }
+#pragma GCC diagnostic pop
     THIS->PC -= (INSTRUCTION_SIZE + 8);   // re-execute next quant (1 + args_len(invoke)=8)
 }
 
@@ -182,7 +191,11 @@ static void vm_get_far(SCRIPT_CTX * THIS, INT16 idxA, UBYTE size, UBYTE bank, UB
 
 static void vm_call_native(SCRIPT_CTX * THIS, UBYTE bank, const void * ptr) {
     (void)bank;
+    // Native handler address arrives as a data pointer; the cast is intentional.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     ((void (*)(SCRIPT_CTX *))ptr)(THIS);
+#pragma GCC diagnostic pop
 }
 
 static void vm_rate_limit_const(SCRIPT_CTX * THIS, UWORD n_frames, INT16 idxA, UBYTE * pc) {
@@ -399,6 +412,10 @@ static const UBYTE vm_args_len[256] = {
     [0x13]=4, [0x14]=4, [0x15]=0, [0x16]=2, [0x17]=2, [0x18]=0, [0x19]=4, [0x1A]=10,
     [0x1B]=0, [0x1C]=8, [0x23]=2, [0x24]=6, [0x25]=0, [0x26]=0, [0x27]=2, [0x28]=4,
     [0x29]=4, [0x2A]=1, [0x2B]=2, [0x2C]=2, [0x2D]=5, [0x76]=6, [0x77]=6,
+    // hardware opcodes (Task 5)
+    [0x31]=2, [0x33]=2, [0x35]=2, [0x3A]=2, [0x51]=1, [0x54]=3,
+    // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
+    [0x57]=1, [0x5D]=1,
 };
 
 // little-endian fixed-argument readers
@@ -459,8 +476,19 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x1C: vm_rate_limit_const(THIS, A_U16(0), A_I16(2), A_PTR(4)); break;
         case 0x2A: vm_test_terminate(THIS, A_U8(0)); break;
         case 0x2D: vm_call_native(THIS, A_U8(0), A_PTR(1)); break;
+        // hardware opcodes (Task 5) -> Butano via hw.cpp
+        // operand is a variable index holding the actor number (GB Studio semantics)
+        case 0x31: hw_actor_activate(*(INT16 *)vm_resolve_ref(THIS, A_I16(0))); break;
+        case 0x33: hw_actor_deactivate(*(INT16 *)vm_resolve_ref(THIS, A_I16(0))); break;
+        case 0x35: hw_actor_set_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
+        case 0x3A: hw_actor_get_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
+        case 0x51: hw_set_sprites_visible(A_U8(0)); break;
+        case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
+        // scene-boot opcodes the editor emits that have no GBA effect yet:
+        case 0x57: /* VM_FADE: gbavm has no fade transition; the screen is always shown */ break;
+        case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
         default:
-            // remaining opcodes (hardware commands, vm_asm) are not in this slice yet
+            // remaining opcodes (other hardware commands, vm_asm) not implemented yet
             vm_last_unimplemented_op = op;
             return 0;
     }
