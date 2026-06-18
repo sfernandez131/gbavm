@@ -7,8 +7,9 @@
 // (jump/call/...) as zeroed fields plus a relocation table; here we patch each
 // field to point into the in-RAM bytecode at load, then execute it.
 //
-// Demo program (generated): activate actor 0, then each frame move it right via
-// the actor ops + an RPN step, looping forever -> an actor that walks right.
+// Two generated blobs: game_script (the start scene's init, run once) and
+// actor_update_script (an actor's update script, a persistent per-frame thread
+// that self-loops via VM_IDLE/VM_JUMP) -> e.g. a d-pad-controllable walking actor.
 
 #include "bn_core.h"
 #include "hw.h"
@@ -23,24 +24,31 @@ extern unsigned char game_script[];
 extern const unsigned int game_script_len;
 extern const unsigned short game_script_relocs[]; // flat {field, target} pairs
 extern const unsigned int game_script_relocs_count;
+
+// Persistent per-frame actor update thread (self-loops via VM_IDLE/VM_JUMP).
+extern unsigned char actor_update_script[];
+extern const unsigned int actor_update_script_len;
+extern const unsigned short actor_update_script_relocs[];
+extern const unsigned int actor_update_script_relocs_count;
 }
 
 namespace
 {
-    // Resolve each code target: *(field) = &bytecode[target].
-    void apply_relocations()
+    // Resolve each code target in `blob`: *(blob+field) = &blob[target]. Byte-wise
+    // because the field sits at an arbitrary (often unaligned) offset and unaligned
+    // 32-bit writes are unsafe on the ARM7TDMI.
+    void apply_relocations(unsigned char * blob, const unsigned short * relocs,
+                           unsigned int count)
     {
-        for(unsigned int i = 0; i < game_script_relocs_count; ++i)
+        for(unsigned int i = 0; i < count; ++i)
         {
-            const unsigned int field = game_script_relocs[i * 2];
-            const unsigned int target = game_script_relocs[i * 2 + 1];
-            // Byte-wise store: the field is at an arbitrary (often unaligned)
-            // offset, and unaligned 32-bit writes are unsafe on the ARM7TDMI.
-            const uintptr_t v = reinterpret_cast<uintptr_t>(game_script + target);
-            game_script[field + 0] = uint8_t(v);
-            game_script[field + 1] = uint8_t(v >> 8);
-            game_script[field + 2] = uint8_t(v >> 16);
-            game_script[field + 3] = uint8_t(v >> 24);
+            const unsigned int field = relocs[i * 2];
+            const unsigned int target = relocs[i * 2 + 1];
+            const uintptr_t v = reinterpret_cast<uintptr_t>(blob + target);
+            blob[field + 0] = uint8_t(v);
+            blob[field + 1] = uint8_t(v >> 8);
+            blob[field + 2] = uint8_t(v >> 16);
+            blob[field + 3] = uint8_t(v >> 24);
         }
     }
 }
@@ -50,9 +58,13 @@ int main()
     bn::core::init();
     hw_init();
 
-    apply_relocations();
+    apply_relocations(game_script, game_script_relocs, game_script_relocs_count);
+    apply_relocations(actor_update_script, actor_update_script_relocs,
+                      actor_update_script_relocs_count);
+
     script_runner_init(TRUE);
-    script_execute(0, game_script, nullptr, 0);
+    script_execute(0, game_script, nullptr, 0);         // scene init: runs once
+    script_execute(0, actor_update_script, nullptr, 0); // actor update: per-frame
 
     while(true)
     {

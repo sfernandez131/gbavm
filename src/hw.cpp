@@ -99,14 +99,16 @@ void hw_actor_get_pos(uint16_t* pos)
 void hw_input_get(uint16_t* dst, uint8_t joyid)
 {
     (void)joyid;
+    // Bit order must match GB Studio's KEY_BITS (the masks the editor emits in
+    // EVENT_IF_INPUT): direction keys in the low nibble, buttons in the high nibble.
     uint16_t m = 0;
-    if(bn::keypad::a_held())      m |= 0x01;
-    if(bn::keypad::b_held())      m |= 0x02;
-    if(bn::keypad::select_held()) m |= 0x04;
-    if(bn::keypad::start_held())  m |= 0x08;
-    if(bn::keypad::right_held())  m |= 0x10;
-    if(bn::keypad::left_held())   m |= 0x20;
-    if(bn::keypad::up_held())     m |= 0x40;
-    if(bn::keypad::down_held())   m |= 0x80;
+    if(bn::keypad::right_held())  m |= 0x01;
+    if(bn::keypad::left_held())   m |= 0x02;
+    if(bn::keypad::up_held())     m |= 0x04;
+    if(bn::keypad::down_held())   m |= 0x08;
+    if(bn::keypad::a_held())      m |= 0x10;
+    if(bn::keypad::b_held())      m |= 0x20;
+    if(bn::keypad::select_held()) m |= 0x40;
+    if(bn::keypad::start_held())  m |= 0x80;
     *dst = m;
 }
