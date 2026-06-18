@@ -15,11 +15,13 @@
 #include "bn_keypad.h"
 #include "bn_optional.h"
 #include "bn_sprite_ptr.h"
+#include "bn_sprite_tiles_item.h"
 #include "bn_regular_bg_ptr.h"
 #include "bn_bg_palettes.h"
 
 #include "bn_sprite_items_hero.h"
 #include "bn_regular_bg_items_scene_bg.h"
+#include "scene_sprites.h" // generated: actor index -> sprite_item + frame ranges
 
 namespace
 {
@@ -32,6 +34,9 @@ namespace
         bool visible = true;
         uint16_t x = 0;                  // position in subpixels
         uint16_t y = 0;
+        uint8_t dir = 0;                 // facing: 0 down, 1 right, 2 up, 3 left
+        bool moving = false;             // moved this frame (set by hw_actor_set_pos)
+        uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
         bn::optional<bn::sprite_ptr> sprite;   // created lazily on first render
     };
 
@@ -59,12 +64,25 @@ void hw_render(void)
         Actor& a = actors[i];
         if(a.active)
         {
+            const GbaActorSprite* def = gba_actor_sprite(i);
+            const bn::sprite_item* item = (def && def->item) ? def->item : nullptr;
             if(!a.sprite)
             {
-                a.sprite = bn::sprite_items::hero.create_sprite(0, 0);
+                a.sprite = item ? item->create_sprite(0, 0)
+                                : bn::sprite_items::hero.create_sprite(0, 0);
+            }
+            if(item)
+            {
+                // Select a frame for the actor's facing + moving state and animate.
+                const int anim = (a.dir & 3) + (a.moving ? 4 : 0);
+                const int len = def->anim_len[anim] ? def->anim_len[anim] : 1;
+                const int frame = def->anim_start[anim] + ((a.anim_timer >> 3) % len);
+                a.sprite->set_tiles(item->tiles_item(), frame);
             }
             a.sprite->set_position(to_screen_x(a.x), to_screen_y(a.y));
             a.sprite->set_visible(a.visible && !sprites_hidden);
+            a.anim_timer++;
+            a.moving = false; // re-set next frame if the script moves the actor again
         }
         else if(a.sprite)
         {
@@ -91,7 +109,22 @@ void hw_actor_deactivate(int16_t id)
 void hw_actor_set_pos(uint16_t* pos)
 {
     int id = int16_t(pos[0]);
-    if(id >= 0 && id < MAX_ACTORS) { actors[id].x = pos[1]; actors[id].y = pos[2]; }
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    // Infer facing from the movement delta so the actor turns as it walks
+    // (until VM_ACTOR_SET_DIR lands in a later gameplay phase).
+    const int dx = int(int16_t(pos[1])) - int(int16_t(a.x));
+    const int dy = int(int16_t(pos[2])) - int(int16_t(a.y));
+    if(dx != 0 || dy != 0)
+    {
+        a.moving = true;
+        const int adx = dx < 0 ? -dx : dx;
+        const int ady = dy < 0 ? -dy : dy;
+        if(adx >= ady) a.dir = (dx >= 0) ? 1 : 3; // right / left
+        else           a.dir = (dy >= 0) ? 0 : 2; // down / up
+    }
+    a.x = pos[1];
+    a.y = pos[2];
 }
 
 void hw_actor_get_pos(uint16_t* pos)
