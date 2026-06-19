@@ -26,6 +26,7 @@
 #include "vm.h"
 #include "hw.h"
 #include "scene.h"
+#include "hw_text.h"
 
 // ---- shared state -------------------------------------------------------------
 
@@ -483,6 +484,9 @@ static const UBYTE vm_args_len[256] = {
     [0x68]=0, [0x69]=0, [0x6A]=0, [0x6B]=0,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
+    // text / overlay / input (P3); 0x40 LOAD_TEXT is variable-length (handled inline)
+    [0x40]=0, [0x41]=2, [0x42]=2, [0x44]=2, [0x45]=3, [0x46]=4, [0x47]=6,
+    [0x4B]=1, [0x4E]=5, [0x52]=1, [0x85]=1,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
     [0x57]=1, [0x5D]=1,
 };
@@ -563,6 +567,37 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x69: scene_stack_pop(); break;
         case 0x6A: scene_stack_pop_all(); break;
         case 0x6B: scene_stack_reset(); break;
+        // text / overlay / input (P3) -> hw_text.cpp
+        case 0x40: { // VM_LOAD_TEXT: nargs + nargs*2 var bytes + inline NUL string
+            UBYTE nargs = a[0];
+            const UBYTE * s = a + 1 + (nargs * 2);
+            int len = 0;
+            while (s[len]) ++len;
+            hw_text_load((const uint8_t *)s, len);
+            THIS->PC = s + len + 1; // advance past the string + its NUL terminator
+            break;
+        }
+        case 0x41: hw_text_display(A_U8(0), A_U8(1)); break;
+        case 0x42: hw_text_overlay_setpos(A_U8(0), A_U8(1)); break;
+        case 0x45: hw_text_overlay_move_to(A_U8(0), A_U8(1), A_I8(2)); break;
+        case 0x46: hw_text_overlay_show(A_U8(0), A_U8(1), A_U8(2), A_U8(3)); break;
+        case 0x47: hw_text_overlay_clear(A_U8(0), A_U8(1), A_U8(2), A_U8(3), A_U8(4), A_U8(5)); break;
+        case 0x4B: hw_text_set_font(A_U8(0)); break;
+        case 0x4E: hw_text_overlay_set_scroll(A_U8(0), A_U8(1), A_U8(2), A_U8(3), A_U8(4)); break;
+        case 0x85: /* VM_SWITCH_TEXT_LAYER: single overlay path -> no-op */ break;
+        case 0x44: { // VM_OVERLAY_WAIT is_modal, wait_flags — yield until satisfied
+            UBYTE flags = A_U8(1);
+            int ready = 1;
+            if ((flags & 1) && !hw_text_window_ready()) ready = 0; // WAIT_WINDOW
+            if ((flags & 2) && !hw_text_drawn()) ready = 0;        // WAIT_TEXT
+            if ((flags & (4 | 8 | 16)) && !hw_text_btn_a()) ready = 0; // WAIT_BTN_*
+            if (!ready) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; }
+            break;
+        }
+        case 0x52: { // VM_INPUT_WAIT mask — wait for a button (A, v1)
+            if (!hw_text_btn_a()) { THIS->PC -= (INSTRUCTION_SIZE + 1); THIS->waitable = TRUE; }
+            break;
+        }
         // scene-boot opcodes the editor emits that have no GBA effect yet:
         case 0x57: /* VM_FADE: gbavm has no fade transition; the screen is always shown */ break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
