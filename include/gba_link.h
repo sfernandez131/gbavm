@@ -38,19 +38,28 @@ typedef struct GbaProc {
 extern const GbaProc gba_procs[];
 extern const unsigned int gba_procs_count;
 
-// gba_scene_init: the start scene's init script (run once at boot).
-// gba_actor_updates[]: each start-scene actor update script (run as a persistent
-// per-frame thread). Count may be 0 (the array then holds a single null slot,
-// since C forbids zero-size arrays).
-extern unsigned char * const gba_scene_init;
-extern unsigned char * const gba_actor_updates[];
-// Runtime actor index for each update script (player = 0, placed actors = 1..),
-// so the engine can activate the actor its update thread drives.
-extern const unsigned char gba_actor_update_actors[];
-extern const unsigned int gba_actor_updates_count;
+// A scene: its init script (run once on load) plus the per-frame actor update
+// scripts and the runtime actor index each one drives (player = 0, placed actors
+// = 1..). actor_updates / actor_update_actors hold a single null/0 slot when the
+// count is 0 (C forbids zero-size arrays).
+typedef struct GbaScene {
+    unsigned char * init;
+    unsigned char * const * actor_updates;
+    const unsigned char * actor_update_actors;
+    unsigned int actor_updates_count;
+} GbaScene;
+
+// The project's scenes + which one to load at boot (both emitted by GBA Studio).
+extern const GbaScene gba_scenes[];
+extern const unsigned int gba_scenes_count;
+extern const unsigned int gba_start_scene; // index into gba_scenes
 
 // Patch every proc's local + symbolic relocations into its bytecode.
 void gba_link_apply(void);
+
+// Load scene `idx`: reset the script runner, run its init, then start each actor
+// update as a persistent per-frame thread (activating that actor).
+void gba_load_scene(unsigned int idx);
 
 #ifdef __cplusplus
 }

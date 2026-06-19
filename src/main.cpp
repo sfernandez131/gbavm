@@ -31,15 +31,7 @@ int main()
     // Seed the VM PRNG (GBA has no DIV register) from accumulated boot ticks.
     vm_boot_seed((UWORD)(rng_seed_timer.elapsed_ticks() & 0xFFFF));
 
-    script_runner_init(TRUE);
-    script_execute(0, gba_scene_init, nullptr, 0); // start scene init: runs once
-    for(unsigned int i = 0; i < gba_actor_updates_count; ++i)
-    {
-        // Activate the actor this update thread drives, then run the thread (it
-        // self-loops via VM_IDLE/VM_JUMP, so one script_execute persists it).
-        hw_actor_activate(gba_actor_update_actors[i]);
-        script_execute(0, gba_actor_updates[i], nullptr, 0); // per-frame actor thread
-    }
+    gba_load_scene(gba_start_scene); // start scene: init + actor update threads
 
     while(true)
     {
