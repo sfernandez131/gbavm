@@ -12,6 +12,7 @@
 // that self-loops via VM_IDLE/VM_JUMP) -> e.g. a d-pad-controllable walking actor.
 
 #include "bn_core.h"
+#include "bn_timer.h"
 #include "hw.h"
 
 #include <cstdint>
@@ -56,11 +57,15 @@ namespace
 int main()
 {
     bn::core::init();
+    bn::timer rng_seed_timer; // free-running; sampled after boot work for a varying seed
     hw_init();
 
     apply_relocations(game_script, game_script_relocs, game_script_relocs_count);
     apply_relocations(actor_update_script, actor_update_script_relocs,
                       actor_update_script_relocs_count);
+
+    // Seed the VM PRNG (GBA has no DIV register) from accumulated boot ticks.
+    vm_boot_seed((UWORD)(rng_seed_timer.elapsed_ticks() & 0xFFFF));
 
     script_runner_init(TRUE);
     script_execute(0, game_script, nullptr, 0);         // scene init: runs once
