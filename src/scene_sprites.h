@@ -12,7 +12,7 @@ struct GbaActorSprite {
 inline const GbaActorSprite* gba_actor_sprite(int index) {
     static const GbaActorSprite table[] = {
     { nullptr, {0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0} },
-    { &bn::sprite_items::scene_sprite_1, { 0, 1, 2, 3, 4, 5, 6, 7 }, { 1, 1, 1, 1, 1, 1, 1, 1 } },
+    { &bn::sprite_items::scene_sprite_1, { 0, 1, 2, 3, 4, 6, 8, 10 }, { 1, 1, 1, 1, 2, 2, 2, 2 } },
     };
     const int count = 2;
     return (index >= 0 && index < count) ? &table[index] : nullptr;
