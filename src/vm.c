@@ -131,6 +131,9 @@ static WORD vm_atan2(WORD y, WORD x) {
 // alignment-safe little-endian reads from the (byte-aligned) bytecode stream
 static inline INT16 rd_i16(const UBYTE * p) { return (INT16)((UWORD)p[0] | ((UWORD)p[1] << 8)); }
 static inline UWORD rd_u16(const UBYTE * p) { return (UWORD)((UWORD)p[0] | ((UWORD)p[1] << 8)); }
+static inline uint32_t rd_u32(const UBYTE * p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
 
 // ---- control-flow opcodes -----------------------------------------------------
 
@@ -368,20 +371,31 @@ static void vm_rpn(SCRIPT_CTX * THIS) {
         op = *((const INT8 *)(THIS->PC++));
         if (op < 0) {
             switch (op) {
-                case VM_OP_REF_MEM_IND:   // raw-pointer memory access: TODO for GBA (32-bit addrs)
-                    op = *((const INT8 *)(THIS->PC++));
-                    *(THIS->stack_ptr) = 0;
-                    THIS->PC += 2;
-                    break;
-                case VM_OP_REF_MEM_SET:   // TODO for GBA
-                    op = *((const INT8 *)(THIS->PC++));
-                    THIS->stack_ptr--;
-                    THIS->PC += 2;
+                // Raw-memory ops address an engine symbol directly. On GBA the
+                // address is a 32-bit pointer the loader relocated in (vs GB's 16-bit
+                // RAM address); the type tag ('i'/'u'/'I') is the access width.
+                case VM_OP_REF_MEM_SET: {   // write the top-of-stack value to *addr
+                    UBYTE mem_type = (UBYTE)*((const INT8 *)(THIS->PC++));
+                    void * addr = (void *)(uintptr_t)rd_u32(THIS->PC);
+                    THIS->PC += 4;
+                    INT16 val = *(--(THIS->stack_ptr));
+                    if (mem_type == VM_OP_MEM_I16) *((INT16 *)addr) = val;
+                    else                           *((INT8 *)addr) = (INT8)val;
                     continue;
-                case VM_OP_REF_MEM:       // TODO for GBA
+                }
+                case VM_OP_REF_MEM: {       // push *addr
+                    UBYTE mem_type = (UBYTE)*((const INT8 *)(THIS->PC++));
+                    void * addr = (void *)(uintptr_t)rd_u32(THIS->PC);
+                    THIS->PC += 4;
+                    if (mem_type == VM_OP_MEM_I16)     *(THIS->stack_ptr) = *((INT16 *)addr);
+                    else if (mem_type == VM_OP_MEM_U8) *(THIS->stack_ptr) = *((UINT8 *)addr);
+                    else                               *(THIS->stack_ptr) = *((INT8 *)addr);
+                    break;
+                }
+                case VM_OP_REF_MEM_IND:     // indirect raw-memory read: TODO; consume + push 0
                     op = *((const INT8 *)(THIS->PC++));
                     *(THIS->stack_ptr) = 0;
-                    THIS->PC += 2;
+                    THIS->PC += 4;
                     break;
                 case VM_OP_REF_SET_IND:
                     idx = rd_i16(THIS->PC);
