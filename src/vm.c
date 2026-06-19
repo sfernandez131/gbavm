@@ -25,6 +25,7 @@
 
 #include "vm.h"
 #include "hw.h"
+#include "scene.h"
 
 // ---- shared state -------------------------------------------------------------
 
@@ -45,6 +46,7 @@ UBYTE vm_last_unimplemented_op = 0;
 UWORD sys_time = 0;
 
 #define EXCEPTION_CODE_NONE 0
+static UWORD vm_exception_param; // set by a change-scene raise / scene pop
 
 // Resolve operand index to a typed pointer (negative = stack-relative, positive = global).
 #define I16P(idx) ((INT16 *)(((idx) < 0) ? THIS->stack_ptr + (idx) : script_memory + (idx)))
@@ -353,7 +355,19 @@ static void vm_memcpy(SCRIPT_CTX * THIS, INT16 idxA, INT16 idxB, INT16 count) {
 
 static void vm_raise(SCRIPT_CTX * THIS, UBYTE code, UBYTE size) {
     vm_exception_code = code;
+    // A change-scene raise carries an inline 2-byte target scene index (the bridge
+    // rewrote the GB far-pointer to an index); capture it before skipping `size`.
+    if (code == EXCEPTION_CHANGE_SCENE) {
+        vm_exception_param = (UWORD)((UWORD)THIS->PC[0] | ((UWORD)THIS->PC[1] << 8));
+    }
     THIS->PC += size;
+}
+
+UWORD vm_get_exception_code(void) { return vm_exception_code; }
+UWORD vm_get_exception_param(void) { return vm_exception_param; }
+void vm_request_change_scene(UWORD index) {
+    vm_exception_code = EXCEPTION_CHANGE_SCENE;
+    vm_exception_param = index;
 }
 
 // RPN expression evaluator: reads a stream of operators from the bytecode
@@ -464,7 +478,9 @@ static const UBYTE vm_args_len[256] = {
     [0x1B]=0, [0x1C]=8, [0x23]=2, [0x24]=6, [0x25]=0, [0x26]=0, [0x27]=2, [0x28]=4,
     [0x29]=4, [0x2A]=1, [0x2B]=2, [0x2C]=2, [0x2D]=5, [0x76]=6, [0x77]=6,
     // hardware opcodes (Task 5)
-    [0x31]=2, [0x33]=2, [0x35]=2, [0x3A]=2, [0x51]=1, [0x54]=3,
+    [0x31]=2, [0x32]=3, [0x33]=2, [0x35]=2, [0x3A]=2, [0x51]=1, [0x54]=3,
+    // scene runtime (P2): scene-stack ops are zero-operand
+    [0x68]=0, [0x69]=0, [0x6A]=0, [0x6B]=0,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
@@ -532,6 +548,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // hardware opcodes (Task 5) -> Butano via hw.cpp
         // operand is a variable index holding the actor number (GB Studio semantics)
         case 0x31: hw_actor_activate(*(INT16 *)vm_resolve_ref(THIS, A_I16(0))); break;
+        case 0x32: hw_actor_set_dir(*(INT16 *)vm_resolve_ref(THIS, A_I16(0)), A_U8(2)); break;
         case 0x33: hw_actor_deactivate(*(INT16 *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x35: hw_actor_set_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x3A: hw_actor_get_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
@@ -541,6 +558,11 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x86: hw_actor_get_angle((uint16_t *)vm_resolve_ref(THIS, A_I16(0)), (int16_t *)vm_resolve_ref(THIS, A_I16(2))); break;
         case 0x89: vm_sin_scale(THIS, A_I16(0), A_I16(2), A_U8(4)); break;
         case 0x8A: vm_cos_scale(THIS, A_I16(0), A_I16(2), A_U8(4)); break;
+        // scene runtime (P2): scene stack -> scene manager (scene.cpp)
+        case 0x68: scene_stack_push(); break;
+        case 0x69: scene_stack_pop(); break;
+        case 0x6A: scene_stack_pop_all(); break;
+        case 0x6B: scene_stack_reset(); break;
         // scene-boot opcodes the editor emits that have no GBA effect yet:
         case 0x57: /* VM_FADE: gbavm has no fade transition; the screen is always shown */ break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;

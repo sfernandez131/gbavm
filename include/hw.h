@@ -27,8 +27,16 @@ void hw_actor_activate(int16_t actor);            // 0x31
 void hw_actor_deactivate(int16_t actor);          // 0x33
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back
+void hw_actor_set_dir(int16_t actor, uint8_t dir); // 0x32  set facing
 void hw_actor_get_angle(uint16_t* params, int16_t* dest); // 0x86  dir -> BRADS angle
 void hw_input_get(uint16_t* dst, uint8_t joyid);  // 0x54  GB-style button bitmask
+
+// --- scene runtime (P2) ---
+// Load scene `index`'s background + per-scene actor sprite bindings (releasing
+// the previous scene's sprites first). Reads the generated gba_scenes[] table.
+void hw_load_scene(int index);
+// Release the current scene's actor sprites (frees Butano sprite-tile VRAM).
+void hw_scene_unload(void);
 
 #ifdef __cplusplus
 }

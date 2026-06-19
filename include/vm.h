@@ -152,6 +152,12 @@ SCRIPT_CTX * script_execute(UBYTE bank, UBYTE * pc, UWORD * handle, UBYTE nargs,
 UBYTE script_terminate(UBYTE ID);
 // run one quant across all active contexts; returns a RUNNER_* code
 UBYTE script_runner_update(void);
+// scene-change exception (P2): the runner returns RUNNER_EXCEPTION; main.cpp reads
+// the code + param to load the target scene. EXCEPTION_CHANGE_SCENE matches vm.i.
+#define EXCEPTION_CHANGE_SCENE 2
+UWORD vm_get_exception_code(void);
+UWORD vm_get_exception_param(void);
+void  vm_request_change_scene(UWORD index);
 // execute a single instruction in the given context; returns 0 at VM_OP_STOP
 UBYTE VM_STEP(SCRIPT_CTX * THIS);
 // resolve a VM operand index to a pointer (used by the hardware bridge, hw.cpp)

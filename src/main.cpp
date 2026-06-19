@@ -14,6 +14,7 @@
 #include "bn_core.h"
 #include "bn_timer.h"
 #include "hw.h"
+#include "scene.h"
 
 #include <cstdint>
 
@@ -27,9 +28,6 @@ extern const unsigned int game_image_len;
 extern const unsigned short game_image_relocs[]; // flat {field, target} pairs
 extern const unsigned int game_image_relocs_count;
 }
-
-// Generated boot entry byte-offsets into game_image[] (init + per-frame update).
-#include "game_entries.h"
 
 namespace
 {
@@ -64,13 +62,19 @@ int main()
     vm_boot_seed((UWORD)(rng_seed_timer.elapsed_ticks() & 0xFFFF));
 
     script_runner_init(TRUE);
-    script_execute(0, game_image + game_image_entry_init, nullptr, 0);   // scene init: runs once
-    script_execute(0, game_image + game_image_entry_update, nullptr, 0); // actor update: per-frame
+    scene_boot(); // load the start scene: bg + actors + init/update script threads
 
     while(true)
     {
-        script_runner_update(); // run the editor-emitted bytecode
-        hw_render();            // push actor state into sprites
+        // Run a quant; a scene-change exception tears down the current scene's
+        // threads (keeping VM variables) and loads the target scene.
+        if(script_runner_update() == RUNNER_EXCEPTION &&
+           vm_get_exception_code() == EXCEPTION_CHANGE_SCENE)
+        {
+            script_runner_init(FALSE); // kill threads, PRESERVE variables
+            scene_load((int)vm_get_exception_param());
+        }
+        hw_render(); // push actor state into sprites
         sys_time++;
         bn::core::update();
     }
