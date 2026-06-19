@@ -15,6 +15,7 @@
 #include "bn_timer.h"
 #include "hw.h"
 #include "scene.h"
+#include "hw_text.h"
 
 #include <cstdint>
 
@@ -74,7 +75,8 @@ int main()
             script_runner_init(FALSE); // kill threads, PRESERVE variables
             scene_load((int)vm_get_exception_param());
         }
-        hw_render(); // push actor state into sprites
+        hw_text_update(); // advance the dialogue typewriter + box state
+        hw_render();      // push actor state into sprites
         sys_time++;
         bn::core::update();
     }
