@@ -42,6 +42,11 @@ static UBYTE vm_loaded_state;
 static UBYTE vm_exception_code;
 static UWORD vm_exception_param; // payload of the pending exception (e.g. scene index)
 
+// Scene stack hooks (gba_scene.cpp). pop/pop_all return the scene index to load.
+extern void gba_scene_push(void);
+extern UWORD gba_scene_pop(void);
+extern UWORD gba_scene_pop_all(void);
+
 UBYTE vm_last_unimplemented_op = 0;
 UWORD sys_time = 0;
 
@@ -566,6 +571,11 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // scene-boot opcodes the editor emits that have no GBA effect yet:
         case 0x57: /* VM_FADE: gbavm has no fade transition; the screen is always shown */ break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
+        // Scene stack: push saves the current scene; pop/pop_all signal a scene
+        // change (like VM_RAISE CHANGE_SCENE) to the popped scene.
+        case 0x68: gba_scene_push(); break;
+        case 0x69: vm_exception_code = EXCEPTION_CHANGE_SCENE; vm_exception_param = gba_scene_pop(); break;
+        case 0x6A: vm_exception_code = EXCEPTION_CHANGE_SCENE; vm_exception_param = gba_scene_pop_all(); break;
         default:
             // remaining opcodes (other hardware commands, vm_asm) not implemented yet
             vm_last_unimplemented_op = op;
