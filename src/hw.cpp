@@ -25,7 +25,7 @@
 namespace
 {
     constexpr int MAX_ACTORS = 8;
-    constexpr int SUBPX = 16;            // subpixels per pixel (kept consistent with bytecode)
+    constexpr int SUBPX = 32;            // GBVM actor position units per pixel (256 per 8px tile)
 
     struct Actor
     {
