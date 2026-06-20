@@ -17,6 +17,9 @@ extern "C" {
 
 // Called once from main() after bn::core::init(), before the script runs.
 void hw_init(void);
+// Set up a scene's hardware state (background + cleared actors) before its scripts
+// run. Called by gba_load_scene; scene_idx indexes the generated per-scene assets.
+void hw_load_scene(int scene_idx);
 // Called once per frame from the main loop, AFTER script_runner_update() and
 // BEFORE bn::core::update(). The ONLY place actor state is pushed into sprites.
 void hw_render(void);

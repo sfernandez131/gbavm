@@ -20,8 +20,7 @@
 #include "bn_bg_palettes.h"
 
 #include "bn_sprite_items_hero.h"
-#include "bn_regular_bg_items_scene_bg.h"
-#include "scene_sprites.h" // generated: actor index -> sprite_item + frame ranges
+#include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
 
 namespace
 {
@@ -42,7 +41,8 @@ namespace
 
     Actor actors[MAX_ACTORS];
     bool sprites_hidden = false;
-    bn::optional<bn::regular_bg_ptr> scene_bg;   // the start scene's background
+    bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
+    int current_scene = 0;                       // index for per-scene sprite lookup
 
     // subpixel world coords -> Butano screen-centered pixel coords (0,0 == screen center)
     bn::fixed to_screen_x(uint16_t sx) { return bn::fixed(int(sx) / SUBPX) - 120; }
@@ -52,9 +52,20 @@ namespace
 void hw_init(void)
 {
     bn::bg_palettes::set_transparent_color(bn::color(2, 4, 12));
-    // Load the start scene's background (GBA Studio's asset pipeline writes it to
-    // graphics/scene_bg.bmp). Centred: the 256x256 bg shows its middle 240x160.
-    scene_bg = bn::regular_bg_items::scene_bg.create_bg(0, 0);
+}
+
+void hw_load_scene(int scene_idx)
+{
+    // Swap in this scene's background (centred: a 256x256 bg shows its middle
+    // 240x160) and clear actors carried from a previous scene; gba_load_scene then
+    // activates the new scene's actors.
+    current_scene = scene_idx;
+    scene_bg = gba_create_scene_bg(scene_idx);
+    for(int i = 0; i < MAX_ACTORS; ++i)
+    {
+        actors[i].active = false;
+        actors[i].sprite.reset();
+    }
 }
 
 void hw_render(void)
@@ -64,7 +75,7 @@ void hw_render(void)
         Actor& a = actors[i];
         if(a.active)
         {
-            const GbaActorSprite* def = gba_actor_sprite(i);
+            const GbaActorSprite* def = gba_actor_sprite(current_scene, i);
             const bn::sprite_item* item = (def && def->item) ? def->item : nullptr;
             if(!a.sprite)
             {
