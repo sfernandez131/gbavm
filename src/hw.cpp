@@ -18,6 +18,7 @@
 #include "bn_sprite_tiles_item.h"
 #include "bn_regular_bg_ptr.h"
 #include "bn_bg_palettes.h"
+#include "bn_camera_ptr.h"
 
 #include "bn_sprite_items_hero.h"
 #include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
@@ -26,6 +27,8 @@ namespace
 {
     constexpr int MAX_ACTORS = 8;
     constexpr int SUBPX = 32;            // GBVM actor position units per pixel (256 per 8px tile)
+    constexpr int HALF_W = 120;          // half the 240x160 GBA screen
+    constexpr int HALF_H = 80;
 
     struct Actor
     {
@@ -42,11 +45,27 @@ namespace
     Actor actors[MAX_ACTORS];
     bool sprites_hidden = false;
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
+    bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
     int current_scene = 0;                       // index for per-scene sprite lookup
+    int scene_w_px = 240;                        // scene logical size (for camera bounds)
+    int scene_h_px = 160;
 
-    // subpixel world coords -> Butano screen-centered pixel coords (0,0 == screen center)
-    bn::fixed to_screen_x(uint16_t sx) { return bn::fixed(int(sx) / SUBPX) - 120; }
-    bn::fixed to_screen_y(uint16_t sy) { return bn::fixed(int(sy) / SUBPX) - 80; }
+    // GBVM actor subpixels -> Butano world pixels. The scene is centred on the world
+    // origin (the bg content is centred on its padded map, which create_bg(0,0) puts
+    // at the origin), so screen placement is left to the camera.
+    bn::fixed to_world_x(uint16_t sx) { return bn::fixed(int(sx) / SUBPX - scene_w_px / 2); }
+    bn::fixed to_world_y(uint16_t sy) { return bn::fixed(int(sy) / SUBPX - scene_h_px / 2); }
+
+    // Clamp a camera centre (world px) so the 240x160 view stays within the scene.
+    // A scene no bigger than the screen on an axis stays centred (no scroll).
+    bn::fixed clamp_cam(bn::fixed c, int scene_size, int half)
+    {
+        const int limit = scene_size / 2 - half;
+        if(limit <= 0) return 0;
+        if(c < -limit) return bn::fixed(-limit);
+        if(c >  limit) return bn::fixed(limit);
+        return c;
+    }
 }
 
 void hw_init(void)
@@ -54,13 +73,18 @@ void hw_init(void)
     bn::bg_palettes::set_transparent_color(bn::color(2, 4, 12));
 }
 
-void hw_load_scene(int scene_idx)
+void hw_load_scene(int scene_idx, int width_px, int height_px)
 {
-    // Swap in this scene's background (centred: a 256x256 bg shows its middle
-    // 240x160) and clear actors carried from a previous scene; gba_load_scene then
-    // activates the new scene's actors.
+    // Swap in this scene's background and clear actors carried from a previous scene;
+    // gba_load_scene then activates the new scene's actors. The camera (shared by bg
+    // + sprites) follows the active actor each frame, clamped to the scene size.
     current_scene = scene_idx;
+    scene_w_px = width_px  > 0 ? width_px  : 240;
+    scene_h_px = height_px > 0 ? height_px : 160;
+    if(!camera) camera = bn::camera_ptr::create(0, 0);
+    else        camera->set_position(0, 0);
     scene_bg = gba_create_scene_bg(scene_idx);
+    scene_bg->set_camera(*camera);
     for(int i = 0; i < MAX_ACTORS; ++i)
     {
         actors[i].active = false;
@@ -70,6 +94,21 @@ void hw_load_scene(int scene_idx)
 
 void hw_render(void)
 {
+    // Camera follows the lowest-index active actor (the player / first placed actor),
+    // clamped so the view never leaves the scene.
+    if(camera)
+    {
+        for(int i = 0; i < MAX_ACTORS; ++i)
+        {
+            if(actors[i].active)
+            {
+                camera->set_position(clamp_cam(to_world_x(actors[i].x), scene_w_px, HALF_W),
+                                     clamp_cam(to_world_y(actors[i].y), scene_h_px, HALF_H));
+                break;
+            }
+        }
+    }
+
     for(int i = 0; i < MAX_ACTORS; ++i)
     {
         Actor& a = actors[i];
@@ -81,6 +120,7 @@ void hw_render(void)
             {
                 a.sprite = item ? item->create_sprite(0, 0)
                                 : bn::sprite_items::hero.create_sprite(0, 0);
+                if(camera) a.sprite->set_camera(*camera);
             }
             if(item)
             {
@@ -90,7 +130,7 @@ void hw_render(void)
                 const int frame = def->anim_start[anim] + ((a.anim_timer >> 3) % len);
                 a.sprite->set_tiles(item->tiles_item(), frame);
             }
-            a.sprite->set_position(to_screen_x(a.x), to_screen_y(a.y));
+            a.sprite->set_position(to_world_x(a.x), to_world_y(a.y));
             a.sprite->set_visible(a.visible && !sprites_hidden);
             a.anim_timer++;
             a.moving = false; // re-set next frame if the script moves the actor again
