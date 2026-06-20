@@ -2,12 +2,16 @@
 #include "gba_link.h"
 extern unsigned char scene_main_init[];
 extern unsigned char actor_player_update[];
+extern unsigned char scene_second_init[];
 
 static unsigned char * const scene0_updates[] = { actor_player_update };
 static const unsigned char scene0_update_actors[] = { 1 };
+static unsigned char * const scene1_updates[] = { 0 };
+static const unsigned char scene1_update_actors[] = { 0 };
 
 const GbaScene gba_scenes[] = {
     { scene_main_init, scene0_updates, scene0_update_actors, 1 },
+    { scene_second_init, scene1_updates, scene1_update_actors, 0 },
 };
-const unsigned int gba_scenes_count = 1;
+const unsigned int gba_scenes_count = 2;
 const unsigned int gba_start_scene = 0;
