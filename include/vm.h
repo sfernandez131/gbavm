@@ -142,6 +142,9 @@ extern UWORD sys_time;
 #define RUNNER_BUSY      2
 #define RUNNER_EXCEPTION 3
 
+// VM_RAISE exception codes acted on by the main loop (see vm_exceptions).
+#define EXCEPTION_CHANGE_SCENE 2
+
 // seed the VM PRNG at boot (GBA has no DIV register; pass a hardware-timer value)
 void vm_boot_seed(UWORD seed);
 // initialize / reset the script runner contexts
@@ -152,6 +155,9 @@ SCRIPT_CTX * script_execute(UBYTE bank, UBYTE * pc, UWORD * handle, UBYTE nargs,
 UBYTE script_terminate(UBYTE ID);
 // run one quant across all active contexts; returns a RUNNER_* code
 UBYTE script_runner_update(void);
+// Pending VM exception + its payload (read by the main loop after RUNNER_EXCEPTION).
+UBYTE vm_get_exception(void);
+UWORD vm_get_exception_param(void);
 // execute a single instruction in the given context; returns 0 at VM_OP_STOP
 UBYTE VM_STEP(SCRIPT_CTX * THIS);
 // resolve a VM operand index to a pointer (used by the hardware bridge, hw.cpp)

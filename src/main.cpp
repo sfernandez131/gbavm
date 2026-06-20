@@ -35,7 +35,13 @@ int main()
 
     while(true)
     {
-        script_runner_update(); // run the editor-emitted bytecode
+        // A "Switch Scene" raises EXCEPTION_CHANGE_SCENE with the target scene index
+        // (gba_load_scene resets the runner + actors and starts the new scene).
+        if(script_runner_update() == RUNNER_EXCEPTION &&
+           vm_get_exception() == EXCEPTION_CHANGE_SCENE)
+        {
+            gba_load_scene(vm_get_exception_param());
+        }
         hw_render();            // push actor state into sprites
         sys_time++;
         bn::core::update();

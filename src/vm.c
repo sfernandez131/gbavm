@@ -40,6 +40,7 @@ static SCRIPT_CTX * executing_ctx;
 static UBYTE vm_lock_state;
 static UBYTE vm_loaded_state;
 static UBYTE vm_exception_code;
+static UWORD vm_exception_param; // payload of the pending exception (e.g. scene index)
 
 UBYTE vm_last_unimplemented_op = 0;
 UWORD sys_time = 0;
@@ -356,8 +357,15 @@ static void vm_memcpy(SCRIPT_CTX * THIS, INT16 idxA, INT16 idxB, INT16 count) {
 
 static void vm_raise(SCRIPT_CTX * THIS, UBYTE code, UBYTE size) {
     vm_exception_code = code;
+    // EXCEPTION_CHANGE_SCENE carries a 2-byte scene index (gbavm-specific, emitted
+    // by the editor's bridge); capture it before skipping the raise's inline data.
+    if (size >= 2) vm_exception_param = rd_u16(THIS->PC);
     THIS->PC += size;
 }
+
+// Read the pending exception + its param (the main loop acts on EXCEPTION_*).
+UBYTE vm_get_exception(void) { return vm_exception_code; }
+UWORD vm_get_exception_param(void) { return vm_exception_param; }
 
 // RPN expression evaluator: reads a stream of operators from the bytecode
 // (terminated by 0) and evaluates it on the data stack.
