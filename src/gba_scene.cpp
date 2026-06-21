@@ -29,7 +29,16 @@ void gba_load_scene(unsigned int idx)
 
     hw_load_scene((int)idx, s.width_px, s.height_px);  // background + cleared actors for this scene
     script_runner_init(TRUE); // reset all contexts for the new scene
-    script_execute(0, s.init, nullptr, 0); // scene init: runs once
+
+    // Place every actor at its authored position + facing before scripts run, so
+    // actors appear where the editor put them even without a Set Position script.
+    for(unsigned int i = 0; i < s.actors_init_count; ++i)
+    {
+        const GbaActorInit & ai = s.actors_init[i];
+        hw_actor_place(ai.index, ai.x, ai.y, ai.dir);
+    }
+
+    script_execute(0, s.init, nullptr, 0); // scene init: runs once (may reposition)
 
     for(unsigned int i = 0; i < s.actor_updates_count; ++i)
     {

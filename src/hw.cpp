@@ -184,6 +184,18 @@ void hw_actor_activate(int16_t id)
     if(id >= 0 && id < MAX_ACTORS) { actors[id].active = true; actors[id].visible = true; }
 }
 
+void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    a.active = true;
+    a.visible = true;
+    a.x = x;
+    a.y = y;
+    a.dir = dir & 3;
+    a.moving = false; // a placement is not movement; don't trigger the walk frames
+}
+
 void hw_actor_deactivate(int16_t id)
 {
     if(id >= 0 && id < MAX_ACTORS) { actors[id].active = false; }

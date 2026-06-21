@@ -29,6 +29,9 @@ void hw_render(void);
 void hw_set_sprites_visible(uint8_t mode);        // 0x51
 void hw_actor_activate(int16_t actor);            // 0x31
 void hw_actor_deactivate(int16_t actor);          // 0x33
+// Place an actor at its initial position + facing on scene load (activates it,
+// no movement inference). Called from gba_load_scene before scripts run.
+void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir);
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back
 void hw_actor_get_angle(uint16_t* params, int16_t* dest); // 0x86  dir -> BRADS angle
