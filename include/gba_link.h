@@ -42,6 +42,14 @@ extern const unsigned int gba_procs_count;
 // scripts and the runtime actor index each one drives (player = 0, placed actors
 // = 1..). actor_updates / actor_update_actors hold a single null/0 slot when the
 // count is 0 (C forbids zero-size arrays).
+// One placed actor's initial state, applied on scene load before any script runs.
+typedef struct GbaActorInit {
+    unsigned char index;   // runtime actor index (player = 0, placed actors = 1..)
+    unsigned char dir;     // facing: 0 down, 1 right, 2 up, 3 left
+    unsigned short x;      // initial position in subpixels (256 per 8px tile)
+    unsigned short y;
+} GbaActorInit;
+
 typedef struct GbaScene {
     unsigned char * init;
     unsigned char * const * actor_updates;
@@ -49,6 +57,8 @@ typedef struct GbaScene {
     unsigned int actor_updates_count;
     unsigned short width_px;   // scene logical size in pixels (for camera clamping)
     unsigned short height_px;
+    const GbaActorInit * actors_init; // placed actors' initial position + facing
+    unsigned int actors_init_count;
 } GbaScene;
 
 // The project's scenes + which one to load at boot (both emitted by GBA Studio).

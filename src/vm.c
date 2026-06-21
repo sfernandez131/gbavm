@@ -492,6 +492,9 @@ static const UBYTE vm_args_len[256] = {
     [0x29]=4, [0x2A]=1, [0x2B]=2, [0x2C]=2, [0x2D]=5, [0x76]=6, [0x77]=6,
     // hardware opcodes (Task 5)
     [0x31]=2, [0x33]=2, [0x35]=2, [0x3A]=2, [0x51]=1, [0x54]=3,
+    // actor movement (M3b): MOVE_TO_INIT/X/Y/XY + attr, SET_DIR + dir, SET_DIR_X/Y,
+    // SET_ANIM_MOVING, MOVE_CANCEL (all take an i16 actor-ref; the move/dir ops add u8)
+    [0x32]=3, [0x34]=3, [0x36]=3, [0x37]=3, [0x38]=3, [0x39]=2, [0x3B]=2, [0x3C]=2, [0x3D]=2,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
@@ -562,6 +565,17 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x33: hw_actor_deactivate(*(INT16 *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x35: hw_actor_set_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x3A: hw_actor_get_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
+        // actor movement (M3b). The i16 operand resolves to an {index, x, y} block;
+        // MOVE_TO_X/Y/XY block (rewind past opcode + its 3 operand bytes) until arrival.
+        case 0x32: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_init((INT16)r[0], r[1], r[2]); break; }
+        case 0x34: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_dir((INT16)r[0], A_U8(2)); break; }
+        case 0x36: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 0)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
+        case 0x37: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 1)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
+        case 0x38: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 2)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
+        case 0x39: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_set_dir((INT16)r[0], 0); break; }
+        case 0x3B: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_set_dir((INT16)r[0], 1); break; }
+        case 0x3C: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_moving((INT16)r[0]); break; }
+        case 0x3D: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_cancel((INT16)r[0]); break; }
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
         // trig + actor-angle opcodes (P0)

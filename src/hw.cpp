@@ -30,6 +30,7 @@ namespace
     constexpr int SUBPX = 32;            // GBVM actor position units per pixel (256 per 8px tile)
     constexpr int HALF_W = 120;          // half the 240x160 GBA screen
     constexpr int HALF_H = 80;
+    constexpr int MOVE_SPEED = 16;       // actor move-to speed in subpixels/frame (~0.5px)
 
     struct Actor
     {
@@ -37,6 +38,8 @@ namespace
         bool visible = true;
         uint16_t x = 0;                  // position in subpixels
         uint16_t y = 0;
+        uint16_t dest_x = 0;             // move-to target in subpixels
+        uint16_t dest_y = 0;
         uint8_t dir = 0;                 // facing: 0 down, 1 right, 2 up, 3 left
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
         uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
@@ -182,6 +185,73 @@ int hw_fade_step(uint8_t flags)
 void hw_actor_activate(int16_t id)
 {
     if(id >= 0 && id < MAX_ACTORS) { actors[id].active = true; actors[id].visible = true; }
+}
+
+void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    a.active = true;
+    a.visible = true;
+    a.x = x;
+    a.y = y;
+    a.dir = dir & 3;
+    a.moving = false; // a placement is not movement; don't trigger the walk frames
+}
+
+// Move one axis toward the destination by MOVE_SPEED, snapping when within range.
+// Returns true once that axis has reached its target.
+static bool move_axis(uint16_t& pos, uint16_t dest)
+{
+    const int d = int(dest) - int(pos);
+    if(d == 0) return true;
+    if(d > 0)  pos = (d <= MOVE_SPEED) ? dest : (uint16_t)(pos + MOVE_SPEED);
+    else       pos = (-d <= MOVE_SPEED) ? dest : (uint16_t)(pos - MOVE_SPEED);
+    return pos == dest;
+}
+
+void hw_actor_move_init(int16_t id, uint16_t dest_x, uint16_t dest_y)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].dest_x = dest_x;
+    actors[id].dest_y = dest_y;
+}
+
+int hw_actor_move_step(int16_t id, uint8_t axis)
+{
+    if(id < 0 || id >= MAX_ACTORS) return 1;
+    Actor& a = actors[id];
+    bool done = true;
+    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x);
+    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y);
+    a.moving = true; // animate as walking until the move op stops re-running
+    return done ? 1 : 0;
+}
+
+void hw_actor_move_set_dir(int16_t id, uint8_t axis)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    if(axis == 0) { const int d = int(a.dest_x) - int(a.x); if(d) a.dir = (d > 0) ? 1 : 3; }
+    else          { const int d = int(a.dest_y) - int(a.y); if(d) a.dir = (d > 0) ? 0 : 2; }
+    a.moving = true;
+}
+
+void hw_actor_move_cancel(int16_t id)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].dest_x = actors[id].x;
+    actors[id].dest_y = actors[id].y;
+}
+
+void hw_actor_set_dir(int16_t id, uint8_t dir)
+{
+    if(id >= 0 && id < MAX_ACTORS) actors[id].dir = dir & 3;
+}
+
+void hw_actor_set_moving(int16_t id)
+{
+    if(id >= 0 && id < MAX_ACTORS) actors[id].moving = true;
 }
 
 void hw_actor_deactivate(int16_t id)

@@ -29,6 +29,20 @@ void hw_render(void);
 void hw_set_sprites_visible(uint8_t mode);        // 0x51
 void hw_actor_activate(int16_t actor);            // 0x31
 void hw_actor_deactivate(int16_t actor);          // 0x33
+// Place an actor at its initial position + facing on scene load (activates it,
+// no movement inference). Called from gba_load_scene before scripts run.
+void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir);
+
+// --- actor movement (VM_ACTOR_MOVE_TO_* / SET_DIR) ---
+// GB Studio's "Move To" compiles to MOVE_TO_INIT (set destination) then per-axis
+// blocking MOVE_TO_X / MOVE_TO_Y (or MOVE_TO_XY for diagonal), with SET_DIR_X/Y
+// in between to face the travel direction.
+void hw_actor_move_init(int16_t id, uint16_t dest_x, uint16_t dest_y);
+int  hw_actor_move_step(int16_t id, uint8_t axis); // axis 0=X 1=Y 2=both; 1 when arrived
+void hw_actor_move_set_dir(int16_t id, uint8_t axis); // face toward dest along axis 0=X 1=Y
+void hw_actor_move_cancel(int16_t id);              // stop moving (clear destination)
+void hw_actor_set_dir(int16_t id, uint8_t dir);     // 0x34 explicit facing
+void hw_actor_set_moving(int16_t id);               // mark moving this frame (walk anim)
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back
 void hw_actor_get_angle(uint16_t* params, int16_t* dest); // 0x86  dir -> BRADS angle
