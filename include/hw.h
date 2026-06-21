@@ -60,6 +60,9 @@ void hw_input_get(uint16_t* dst, uint8_t joyid);  // 0x54  GB-style button bitma
 // 0x57 VM_FADE: advance the screen fade one frame (flags bit 0x02 = fade in, else
 // out). Returns 1 once the fade is complete; the VM blocks the thread until then.
 int hw_fade_step(uint8_t flags);
+// 0x90 VM_DISPLAY_TEXT: show the dialogue text (M4 step 1: a fixed placeholder string
+// rendered via Butano's text generator) and wait for A. Returns 1 once dismissed.
+int hw_text_step(void);
 
 #ifdef __cplusplus
 }
