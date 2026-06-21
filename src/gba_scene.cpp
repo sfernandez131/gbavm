@@ -29,6 +29,7 @@ void gba_load_scene(unsigned int idx)
 
     hw_load_scene((int)idx, s.width_px, s.height_px);  // background + cleared actors for this scene
     hw_set_player_move(s.player_move);                 // built-in d-pad control for this scene type
+    hw_set_collisions(s.collisions, s.width_px / 8, s.height_px / 8); // tile collision grid
     script_runner_init(TRUE); // reset all contexts for the new scene
 
     // Place every actor at its authored position + facing before scripts run, so

@@ -60,6 +60,7 @@ typedef struct GbaScene {
     const GbaActorInit * actors_init; // placed actors' initial position + facing
     unsigned int actors_init_count;
     unsigned char player_move; // 1 = built-in top-down d-pad movement for actor 0
+    const unsigned char * collisions; // one byte per tile (row-major, width_px/8 wide); 0 = open
 } GbaScene;
 
 // The project's scenes + which one to load at boot (both emitted by GBA Studio).
