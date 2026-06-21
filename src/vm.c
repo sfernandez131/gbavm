@@ -588,8 +588,14 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // (rewind past opcode + its 1-byte flags operand, then yield).
         case 0x57: if (!hw_fade_step(A_U8(0))) { THIS->PC -= (INSTRUCTION_SIZE + 1); THIS->waitable = TRUE; } break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
-        // VM_DISPLAY_TEXT: show the dialogue text and block until A dismisses it.
-        case 0x90: if (!hw_text_step()) { THIS->PC -= INSTRUCTION_SIZE; THIS->waitable = TRUE; } break;
+        // VM_DISPLAY_TEXT: show the inline null-terminated dialogue text and block
+        // until A dismisses it; on completion skip past the text bytes + terminator.
+        case 0x90: {
+            const char *txt = (const char *)a;
+            if (hw_text_step(txt)) { UWORD len = 0; while (txt[len]) len++; THIS->PC += (UWORD)(len + 1); }
+            else { THIS->PC -= INSTRUCTION_SIZE; THIS->waitable = TRUE; }
+            break;
+        }
         // Scene stack: push saves the current scene; pop/pop_all signal a scene
         // change (like VM_RAISE CHANGE_SCENE) to the popped scene.
         case 0x68: gba_scene_push(); break;
