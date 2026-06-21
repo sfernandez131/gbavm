@@ -25,6 +25,13 @@ void hw_load_scene(int scene_idx, int width_px, int height_px);
 // BEFORE bn::core::update(). The ONLY place actor state is pushed into sprites.
 void hw_render(void);
 
+// Enable/disable built-in top-down player movement for the loaded scene (set by
+// gba_load_scene from the scene's player_move flag).
+void hw_set_player_move(uint8_t enabled);
+// Move the player (actor 0) from the live d-pad each frame when player movement is
+// enabled. Called from the main loop before hw_render.
+void hw_player_update(void);
+
 // --- hardware opcode handlers (invoked from VM_STEP cases) ---
 void hw_set_sprites_visible(uint8_t mode);        // 0x51
 void hw_actor_activate(int16_t actor);            // 0x31
