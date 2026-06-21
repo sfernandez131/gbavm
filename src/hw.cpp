@@ -18,6 +18,7 @@
 #include "bn_sprite_tiles_item.h"
 #include "bn_regular_bg_ptr.h"
 #include "bn_bg_palettes.h"
+#include "bn_sprite_palettes.h"
 #include "bn_camera_ptr.h"
 
 #include "bn_sprite_items_hero.h"
@@ -65,6 +66,19 @@ namespace
         if(c < -limit) return bn::fixed(-limit);
         if(c >  limit) return bn::fixed(limit);
         return c;
+    }
+
+    // Screen fade (VM_FADE). fade_intensity: 0 = fully visible, 1 = fully black.
+    // A fade runs over FADE_FRAMES frames toward its target; fade_dir is the active
+    // direction (0 idle, -1 fading in, +1 fading out).
+    constexpr int FADE_FRAMES = 16; // frames for a full fade (~0.27s)
+    bn::fixed fade_intensity = 0;
+    int fade_dir = 0;
+
+    void apply_fade()
+    {
+        bn::bg_palettes::set_fade(bn::color(0, 0, 0), fade_intensity);
+        bn::sprite_palettes::set_fade(bn::color(0, 0, 0), fade_intensity);
     }
 }
 
@@ -145,6 +159,24 @@ void hw_render(void)
 void hw_set_sprites_visible(uint8_t mode)
 {
     sprites_hidden = (mode != 0);
+}
+
+int hw_fade_step(uint8_t flags)
+{
+    const bool fade_in = (flags & 0x02) != 0; // .FADE_IN = 0x02, else fade out
+    const int want_dir = fade_in ? -1 : 1;
+    if(fade_dir != want_dir)
+    {
+        // First frame of this fade: snap to the opposite end before stepping.
+        fade_intensity = fade_in ? bn::fixed(1) : bn::fixed(0);
+        fade_dir = want_dir;
+    }
+    fade_intensity += bn::fixed(want_dir) / FADE_FRAMES;
+    int done = 0;
+    if(fade_in && fade_intensity <= 0)       { fade_intensity = 0; fade_dir = 0; done = 1; }
+    else if(!fade_in && fade_intensity >= 1) { fade_intensity = 1; fade_dir = 0; done = 1; }
+    apply_fade();
+    return done;
 }
 
 void hw_actor_activate(int16_t id)

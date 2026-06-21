@@ -568,8 +568,9 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x86: hw_actor_get_angle((uint16_t *)vm_resolve_ref(THIS, A_I16(0)), (int16_t *)vm_resolve_ref(THIS, A_I16(2))); break;
         case 0x89: vm_sin_scale(THIS, A_I16(0), A_I16(2), A_U8(4)); break;
         case 0x8A: vm_cos_scale(THIS, A_I16(0), A_I16(2), A_U8(4)); break;
-        // scene-boot opcodes the editor emits that have no GBA effect yet:
-        case 0x57: /* VM_FADE: gbavm has no fade transition; the screen is always shown */ break;
+        // VM_FADE: fade the screen out/in; blocks the thread until the fade ends
+        // (rewind past opcode + its 1-byte flags operand, then yield).
+        case 0x57: if (!hw_fade_step(A_U8(0))) { THIS->PC -= (INSTRUCTION_SIZE + 1); THIS->waitable = TRUE; } break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
         // Scene stack: push saves the current scene; pop/pop_all signal a scene
         // change (like VM_RAISE CHANGE_SCENE) to the popped scene.

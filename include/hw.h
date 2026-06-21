@@ -33,6 +33,9 @@ void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uin
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back
 void hw_actor_get_angle(uint16_t* params, int16_t* dest); // 0x86  dir -> BRADS angle
 void hw_input_get(uint16_t* dst, uint8_t joyid);  // 0x54  GB-style button bitmask
+// 0x57 VM_FADE: advance the screen fade one frame (flags bit 0x02 = fade in, else
+// out). Returns 1 once the fade is complete; the VM blocks the thread until then.
+int hw_fade_step(uint8_t flags);
 
 #ifdef __cplusplus
 }
