@@ -48,6 +48,7 @@ namespace
 
     Actor actors[MAX_ACTORS];
     bool sprites_hidden = false;
+    bool player_move_enabled = false;            // top-down d-pad control of actor 0
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
     int current_scene = 0;                       // index for per-scene sprite lookup
@@ -162,6 +163,24 @@ void hw_render(void)
 void hw_set_sprites_visible(uint8_t mode)
 {
     sprites_hidden = (mode != 0);
+}
+
+void hw_set_player_move(uint8_t enabled)
+{
+    player_move_enabled = (enabled != 0);
+}
+
+void hw_player_update(void)
+{
+    // Built-in top-down control: move the player (actor 0) from the live d-pad.
+    // Horizontal + vertical can combine (8-way); facing prefers the horizontal axis.
+    if(!player_move_enabled) return;
+    Actor& p = actors[0];
+    if(!p.active) return;
+    if(bn::keypad::right_held())     { p.x += MOVE_SPEED; p.dir = 1; p.moving = true; }
+    else if(bn::keypad::left_held()) { p.x -= MOVE_SPEED; p.dir = 3; p.moving = true; }
+    if(bn::keypad::up_held())        { p.y -= MOVE_SPEED; if(!p.moving) p.dir = 2; p.moving = true; }
+    else if(bn::keypad::down_held()) { p.y += MOVE_SPEED; if(!p.moving) p.dir = 0; p.moving = true; }
 }
 
 int hw_fade_step(uint8_t flags)
