@@ -47,6 +47,8 @@ typedef struct GbaScene {
     unsigned char * const * actor_updates;
     const unsigned char * actor_update_actors;
     unsigned int actor_updates_count;
+    unsigned short width_px;   // scene logical size in pixels (for camera clamping)
+    unsigned short height_px;
 } GbaScene;
 
 // The project's scenes + which one to load at boot (both emitted by GBA Studio).

@@ -27,7 +27,7 @@ void gba_load_scene(unsigned int idx)
     current_scene = idx;
     const GbaScene & s = gba_scenes[idx];
 
-    hw_load_scene((int)idx);  // background + cleared actors for this scene
+    hw_load_scene((int)idx, s.width_px, s.height_px);  // background + cleared actors for this scene
     script_runner_init(TRUE); // reset all contexts for the new scene
     script_execute(0, s.init, nullptr, 0); // scene init: runs once
 
