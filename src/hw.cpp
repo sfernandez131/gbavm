@@ -20,6 +20,9 @@
 #include "bn_bg_palettes.h"
 #include "bn_sprite_palettes.h"
 #include "bn_camera_ptr.h"
+#include "bn_sprite_text_generator.h"
+#include "bn_vector.h"
+#include "common_variable_8x16_sprite_font.h"
 
 #include "bn_sprite_items_hero.h"
 #include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
@@ -51,6 +54,9 @@ namespace
     bool player_move_enabled = false;            // top-down d-pad control of actor 0
     const uint8_t* collisions = nullptr;         // scene collision grid (one byte/tile)
     int coll_w = 0, coll_h = 0;                  // collision grid size in tiles
+    bn::optional<bn::sprite_text_generator> text_gen;  // dialogue text (Butano font)
+    bn::vector<bn::sprite_ptr, 48> text_sprites;
+    bool text_showing = false;
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
     int current_scene = 0;                       // index for per-scene sprite lookup
@@ -219,6 +225,31 @@ int hw_fade_step(uint8_t flags)
     else if(!fade_in && fade_intensity >= 1) { fade_intensity = 1; fade_dir = 0; done = 1; }
     apply_fade();
     return done;
+}
+
+int hw_text_step(void)
+{
+    // M4 step 1: render a placeholder dialogue line via Butano's text generator and
+    // hold until A. (Showing the actual VM_LOAD_TEXT string is the next M4 step.)
+    if(!text_gen)
+    {
+        text_gen = bn::sprite_text_generator(common::variable_8x16_sprite_font);
+        text_gen->set_left_alignment();
+    }
+    if(!text_showing)
+    {
+        text_sprites.clear();
+        text_gen->generate(-112, 52, "gbavm: text rendering works!", text_sprites);
+        text_showing = true;
+        return 0; // wait for the player to dismiss
+    }
+    if(bn::keypad::a_pressed())
+    {
+        text_sprites.clear();
+        text_showing = false;
+        return 1; // dismissed
+    }
+    return 0;
 }
 
 void hw_actor_activate(int16_t id)
