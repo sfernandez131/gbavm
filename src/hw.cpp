@@ -49,6 +49,8 @@ namespace
     Actor actors[MAX_ACTORS];
     bool sprites_hidden = false;
     bool player_move_enabled = false;            // top-down d-pad control of actor 0
+    const uint8_t* collisions = nullptr;         // scene collision grid (one byte/tile)
+    int coll_w = 0, coll_h = 0;                  // collision grid size in tiles
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
     int current_scene = 0;                       // index for per-scene sprite lookup
@@ -70,6 +72,16 @@ namespace
         if(c < -limit) return bn::fixed(-limit);
         if(c >  limit) return bn::fixed(limit);
         return c;
+    }
+
+    // Would a point at (sx, sy) subpixels sit in a solid tile? Outside the scene
+    // grid counts as solid, so this also enforces the scene bounds.
+    bool is_solid_subpx(int sx, int sy)
+    {
+        const int tx = sx / SUBPX / 8, ty = sy / SUBPX / 8; // subpx -> px -> tile
+        if(tx < 0 || ty < 0 || tx >= coll_w || ty >= coll_h) return true;
+        if(!collisions) return false;
+        return (collisions[ty * coll_w + tx] & 0x0f) != 0; // any COLLISION_* direction bit
     }
 
     // Screen fade (VM_FADE). fade_intensity: 0 = fully visible, 1 = fully black.
@@ -170,6 +182,13 @@ void hw_set_player_move(uint8_t enabled)
     player_move_enabled = (enabled != 0);
 }
 
+void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles)
+{
+    collisions = grid;
+    coll_w = width_tiles;
+    coll_h = height_tiles;
+}
+
 void hw_player_update(void)
 {
     // Built-in top-down control: move the player (actor 0) from the live d-pad.
@@ -177,10 +196,11 @@ void hw_player_update(void)
     if(!player_move_enabled) return;
     Actor& p = actors[0];
     if(!p.active) return;
-    if(bn::keypad::right_held())     { p.x += MOVE_SPEED; p.dir = 1; p.moving = true; }
-    else if(bn::keypad::left_held()) { p.x -= MOVE_SPEED; p.dir = 3; p.moving = true; }
-    if(bn::keypad::up_held())        { p.y -= MOVE_SPEED; if(!p.moving) p.dir = 2; p.moving = true; }
-    else if(bn::keypad::down_held()) { p.y += MOVE_SPEED; if(!p.moving) p.dir = 0; p.moving = true; }
+    // Face + animate toward the held direction, but only advance into open tiles.
+    if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + MOVE_SPEED; if(!is_solid_subpx(n, p.y)) p.x = n; }
+    else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - MOVE_SPEED; if(!is_solid_subpx(n, p.y)) p.x = n; }
+    if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - MOVE_SPEED; if(!is_solid_subpx(p.x, n)) p.y = n; }
+    else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + MOVE_SPEED; if(!is_solid_subpx(p.x, n)) p.y = n; }
 }
 
 int hw_fade_step(uint8_t flags)
@@ -219,13 +239,16 @@ void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
 }
 
 // Move one axis toward the destination by MOVE_SPEED, snapping when within range.
-// Returns true once that axis has reached its target.
-static bool move_axis(uint16_t& pos, uint16_t dest)
+// `cross` is the other axis' position (for the collision check). Returns true once
+// that axis reaches its target OR a solid tile blocks it (the move stops there).
+static bool move_axis(uint16_t& pos, uint16_t dest, uint16_t cross, bool axis_x)
 {
     const int d = int(dest) - int(pos);
     if(d == 0) return true;
-    if(d > 0)  pos = (d <= MOVE_SPEED) ? dest : (uint16_t)(pos + MOVE_SPEED);
-    else       pos = (-d <= MOVE_SPEED) ? dest : (uint16_t)(pos - MOVE_SPEED);
+    const uint16_t step = (d > 0) ? ((d <= MOVE_SPEED) ? dest : (uint16_t)(pos + MOVE_SPEED))
+                                  : ((-d <= MOVE_SPEED) ? dest : (uint16_t)(pos - MOVE_SPEED));
+    if(axis_x ? is_solid_subpx(step, cross) : is_solid_subpx(cross, step)) return true; // blocked: stop
+    pos = step;
     return pos == dest;
 }
 
@@ -241,8 +264,8 @@ int hw_actor_move_step(int16_t id, uint8_t axis)
     if(id < 0 || id >= MAX_ACTORS) return 1;
     Actor& a = actors[id];
     bool done = true;
-    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x);
-    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y);
+    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x, a.y, true);
+    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y, a.x, false);
     a.moving = true; // animate as walking until the move op stops re-running
     return done ? 1 : 0;
 }

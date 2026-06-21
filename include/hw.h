@@ -28,6 +28,9 @@ void hw_render(void);
 // Enable/disable built-in top-down player movement for the loaded scene (set by
 // gba_load_scene from the scene's player_move flag).
 void hw_set_player_move(uint8_t enabled);
+// Set the loaded scene's collision grid (one byte/tile, row-major). Movement is
+// blocked into any tile whose low nibble is non-zero, and outside the grid bounds.
+void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);
 // Move the player (actor 0) from the live d-pad each frame when player movement is
 // enabled. Called from the main loop before hw_render.
 void hw_player_update(void);
