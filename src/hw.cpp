@@ -227,10 +227,10 @@ int hw_fade_step(uint8_t flags)
     return done;
 }
 
-int hw_text_step(void)
+int hw_text_step(const char* text)
 {
-    // M4 step 1: render a placeholder dialogue line via Butano's text generator and
-    // hold until A. (Showing the actual VM_LOAD_TEXT string is the next M4 step.)
+    // Render the dialogue line via Butano's text generator and hold until A. Long
+    // lines are clamped to what fits in the sprite vector so generate() can't assert.
     if(!text_gen)
     {
         text_gen = bn::sprite_text_generator(common::variable_8x16_sprite_font);
@@ -239,7 +239,11 @@ int hw_text_step(void)
     if(!text_showing)
     {
         text_sprites.clear();
-        text_gen->generate(-112, 52, "gbavm: text rendering works!", text_sprites);
+        char line[40];
+        int n = 0;
+        for(; text && text[n] && n < (int)sizeof(line) - 1; ++n) line[n] = text[n];
+        line[n] = '\0';
+        text_gen->generate(-112, 52, line, text_sprites);
         text_showing = true;
         return 0; // wait for the player to dismiss
     }
