@@ -593,9 +593,22 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // VM_DISPLAY_TEXT: show the inline null-terminated dialogue text and block
         // until A dismisses it; on completion skip past the text bytes + terminator.
         case 0x90: {
-            const char *txt = (const char *)a;
-            if (hw_text_step(txt)) { UWORD len = 0; while (txt[len]) len++; THIS->PC += (UWORD)(len + 1); }
-            else { THIS->PC -= INSTRUCTION_SIZE; THIS->waitable = TRUE; }
+            // Payload: var-count, then count 16-bit script_memory indices, then the
+            // null-terminated text. Resolve each variable's value for the text's %d
+            // placeholders (M4i interpolation), then render + wait for A.
+            const UBYTE *p = a;
+            UBYTE nvars = *p++;
+            INT16 vals[8];
+            for (UBYTE i = 0; i < nvars; i++) {
+                UWORD idx = (UWORD)((UWORD)p[0] | ((UWORD)p[1] << 8));
+                p += 2;
+                if (i < 8) vals[i] = (INT16)script_memory[idx];
+            }
+            const char *txt = (const char *)p;
+            if (hw_text_step(txt, vals, nvars)) {
+                UWORD len = 0; while (txt[len]) len++;
+                THIS->PC += (UWORD)(1 + nvars * 2 + len + 1);
+            } else { THIS->PC -= INSTRUCTION_SIZE; THIS->waitable = TRUE; }
             break;
         }
         // Dialogue overlay window box (M4d): non-blocking; the box slides via
