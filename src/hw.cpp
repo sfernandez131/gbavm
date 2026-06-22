@@ -81,6 +81,20 @@ namespace
         const int speed = (param - 1) & 7;
         return speed == 0 ? 0 : (ui_time_masks[speed] + 1);
     }
+    // Write a signed value as decimal into `out` (up to `max` chars). Returns the
+    // number of chars written. Used to substitute %d placeholders (M4i interpolation).
+    int format_dec(int v, char* out, int max)
+    {
+        char tmp[8];
+        int t = 0;
+        unsigned int u = (v < 0) ? (unsigned int)(-v) : (unsigned int)v;
+        do { tmp[t++] = (char)('0' + (u % 10)); u /= 10; } while(u && t < (int)sizeof(tmp));
+        int n = 0;
+        if(v < 0 && n < max) out[n++] = '-';
+        while(t > 0 && n < max) out[n++] = tmp[--t];
+        return n;
+    }
+
     // Consume any \001 set-speed codes at the reveal cursor (each is the code byte +
     // a param byte), applying the new rate. Control codes are instant (no reveal tick)
     // and are skipped when rendering glyphs, so the cursor steps past them here.
@@ -359,7 +373,7 @@ int hw_fade_step(uint8_t flags)
     return done;
 }
 
-int hw_text_step(const char* text)
+int hw_text_step(const char* text, const int16_t* values, int n_values)
 {
     // Reveal the dialogue line char-by-char via Butano's text generator (typewriter),
     // then hold until A. The line is clamped to what fits in the sprite vector so
@@ -373,12 +387,28 @@ int hw_text_step(const char* text)
     }
     if(!text_showing)
     {
-        // Latch the text into a stable buffer and start with nothing revealed.
-        int n = 0, lines = 1;
-        for(; text && text[n] && n < (int)sizeof(text_buf) - 1; ++n)
+        // Latch the text into a stable buffer, substituting each %d placeholder with
+        // the next variable's decimal value (M4i) and %% with a literal %. Speed codes
+        // (\001) are copied verbatim for the typewriter to consume.
+        int n = 0, lines = 1, vi = 0;
+        const int cap = (int)sizeof(text_buf) - 1;
+        for(int i = 0; text && text[i] && n < cap; )
         {
-            text_buf[n] = text[n];
-            if(text[n] == '\n') ++lines; // count lines for the bottom-aligned layout
+            if(text[i] == '%' && text[i + 1] == 'd' && vi < n_values)
+            {
+                n += format_dec(values[vi++], &text_buf[n], cap - n);
+                i += 2;
+            }
+            else if(text[i] == '%' && text[i + 1] == '%')
+            {
+                text_buf[n++] = '%';
+                i += 2;
+            }
+            else
+            {
+                if(text[i] == '\n') ++lines; // count lines for the bottom-aligned layout
+                text_buf[n++] = text[i++];
+            }
         }
         text_buf[n] = '\0';
         text_len = n;

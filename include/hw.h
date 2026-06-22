@@ -66,8 +66,9 @@ void hw_input_get(uint16_t* dst, uint8_t joyid);  // 0x54  GB-style button bitma
 int hw_fade_step(uint8_t flags);
 // 0x90 VM_DISPLAY_TEXT: show `text` (the dialogue string, rendered via Butano's text
 // generator) and wait for A. Returns 1 once dismissed. `text` follows the opcode
-// inline (null-terminated) in the bytecode.
-int hw_text_step(const char* text);
+// inline (null-terminated) in the bytecode. `values`/`n_values` are the variable
+// values substituted for the text's %d placeholders (M4i); pass NULL/0 for plain text.
+int hw_text_step(const char* text, const int16_t* values, int n_values);
 // --- dialogue overlay window box (M4d) ---
 // A Butano panel drawn behind the dialogue text. The box spans the screen width and
 // sits at the bottom; its height is derived from the GBVM overlay Y (rows from the
