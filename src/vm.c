@@ -501,6 +501,8 @@ static const UBYTE vm_args_len[256] = {
     [0x57]=1, [0x5D]=1,
     // dialogue text (M4): VM_DISPLAY_TEXT -> show text + wait for A (no operands)
     [0x90]=0,
+    // dialogue overlay window box (M4d): MOVE_TO x,y,speed; SHOW x,y,color,options; HIDE
+    [0x91]=3, [0x92]=4, [0x93]=0,
 };
 
 // little-endian fixed-argument readers
@@ -596,6 +598,11 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
             else { THIS->PC -= INSTRUCTION_SIZE; THIS->waitable = TRUE; }
             break;
         }
+        // Dialogue overlay window box (M4d): non-blocking; the box slides via
+        // hw_overlay_update each frame. The text op (0x90) still owns the A-wait.
+        case 0x91: hw_overlay_move_to(A_U8(0), A_U8(1), A_I8(2)); break;
+        case 0x92: hw_overlay_show(A_U8(0), A_U8(1), A_U8(2)); break;
+        case 0x93: hw_overlay_hide(); break;
         // Scene stack: push saves the current scene; pop/pop_all signal a scene
         // change (like VM_RAISE CHANGE_SCENE) to the popped scene.
         case 0x68: gba_scene_push(); break;

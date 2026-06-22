@@ -22,9 +22,12 @@
 #include "bn_camera_ptr.h"
 #include "bn_sprite_text_generator.h"
 #include "bn_vector.h"
+#include "bn_window.h"
+#include "bn_rect_window.h"
 #include "common_variable_8x16_sprite_font.h"
 
 #include "bn_sprite_items_hero.h"
+#include "bn_regular_bg_items_dialogue_panel.h" // committed asset: solid dialogue panel bg
 #include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
 
 namespace
@@ -57,6 +60,41 @@ namespace
     bn::optional<bn::sprite_text_generator> text_gen;  // dialogue text (Butano font)
     bn::vector<bn::sprite_ptr, 48> text_sprites;
     bool text_showing = false;
+
+    // --- dialogue overlay window box (M4d) ---
+    // A solid bg panel clipped by an internal rect window to a bottom strip, drawn
+    // behind the text. GB Studio drives it in 18-row screen tiles (Y=18 hidden); we
+    // anchor the box to the screen bottom (Butano y=+80) and grow it upward.
+    constexpr int SCREEN_BOTTOM = 80;            // Butano y of the screen's bottom edge
+    constexpr int OVERLAY_SLIDE_PX = 6;          // default slide speed (px/frame)
+    bn::optional<bn::regular_bg_ptr> panel_bg;   // the dialogue panel (lazily created)
+    bool overlay_inited = false;
+    bn::fixed box_top = SCREEN_BOTTOM;           // current window top (y); 80 = hidden
+    bn::fixed box_top_target = SCREEN_BOTTOM;    // target top the box slides toward
+    int box_slide_px = OVERLAY_SLIDE_PX;         // this move's slide speed (px/frame)
+
+    // GBVM overlay row Y -> the box's target top edge in Butano screen y. The box
+    // bottom is the screen bottom; (18 - y) rows * 8px tall, clamped to the screen.
+    bn::fixed overlay_top_for_row(int y)
+    {
+        int rows = 18 - y;
+        if(rows < 0) rows = 0;
+        if(rows > 20) rows = 20;                 // never taller than the 160px screen
+        return bn::fixed(SCREEN_BOTTOM - rows * 8);
+    }
+
+    // Create the panel bg + window on first use. The panel covers the screen (a solid
+    // colour) but the internal rect window shows it only inside the box; priority 2
+    // keeps it in front of the scene bg and over actor sprites, behind the text.
+    void overlay_init()
+    {
+        if(overlay_inited) return;
+        panel_bg = bn::regular_bg_items::dialogue_panel.create_bg(0, 0);
+        panel_bg->set_priority(2);               // scene bg = 3, text sprites = bg_priority 1
+        panel_bg->set_visible(false);
+        bn::window::outside().set_show_bg(*panel_bg, false); // panel only inside the box rect
+        overlay_inited = true;
+    }
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
     int current_scene = 0;                       // index for per-scene sprite lookup
@@ -121,6 +159,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     else        camera->set_position(0, 0);
     scene_bg = gba_create_scene_bg(scene_idx);
     scene_bg->set_camera(*camera);
+    hw_overlay_hide(); // clear any dialogue box carried from the previous scene
     for(int i = 0; i < MAX_ACTORS; ++i)
     {
         actors[i].active = false;
@@ -209,6 +248,59 @@ void hw_player_update(void)
     else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + MOVE_SPEED; if(!is_solid_subpx(p.x, n)) p.y = n; }
 }
 
+void hw_overlay_move_to(int x, int y, int speed)
+{
+    // Non-blocking: set the box target; hw_overlay_update slides it there. The box is
+    // full-width at the bottom (x/width are ignored for the dialogue box for now).
+    (void)x;
+    overlay_init();
+    box_top_target = overlay_top_for_row(y);
+    box_slide_px = (speed > 0) ? speed : OVERLAY_SLIDE_PX; // negatives are sentinels
+    if(speed == -3) box_top = box_top_target;              // .OVERLAY_SPEED_INSTANT
+}
+
+void hw_overlay_show(int x, int y, int color)
+{
+    // Show the box at row y immediately (used by menus/choices; colour ignored for now).
+    (void)x; (void)color;
+    overlay_init();
+    box_top_target = overlay_top_for_row(y);
+    box_top = box_top_target;
+}
+
+void hw_overlay_hide(void)
+{
+    // Snap the box off the bottom of the screen.
+    box_top_target = SCREEN_BOTTOM;
+    box_top = SCREEN_BOTTOM;
+}
+
+void hw_overlay_update(void)
+{
+    if(!overlay_inited) return;
+    // Slide the current top toward the target by the move's speed, snapping on arrival.
+    if(box_top < box_top_target)
+    {
+        box_top += box_slide_px;
+        if(box_top > box_top_target) box_top = box_top_target;
+    }
+    else if(box_top > box_top_target)
+    {
+        box_top -= box_slide_px;
+        if(box_top < box_top_target) box_top = box_top_target;
+    }
+    // Show the panel only while the box has height; clip it to the bottom strip.
+    if(box_top >= SCREEN_BOTTOM)
+    {
+        panel_bg->set_visible(false);
+    }
+    else
+    {
+        panel_bg->set_visible(true);
+        bn::rect_window::internal().set_boundaries(box_top, -HALF_W, SCREEN_BOTTOM, HALF_W);
+    }
+}
+
 int hw_fade_step(uint8_t flags)
 {
     const bool fade_in = (flags & 0x02) != 0; // .FADE_IN = 0x02, else fade out
@@ -235,6 +327,7 @@ int hw_text_step(const char* text)
     {
         text_gen = bn::sprite_text_generator(common::variable_8x16_sprite_font);
         text_gen->set_left_alignment();
+        text_gen->set_bg_priority(1); // in front of the overlay panel (priority 2)
     }
     if(!text_showing)
     {

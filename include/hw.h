@@ -34,6 +34,10 @@ void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_ti
 // Move the player (actor 0) from the live d-pad each frame when player movement is
 // enabled. Called from the main loop before hw_render.
 void hw_player_update(void);
+// Animate the dialogue overlay window box one frame (slide in/out). Called from the
+// main loop each frame, like hw_player_update; independent of the VM so the box can
+// finish sliding out after the script that hid it has ended.
+void hw_overlay_update(void);
 
 // --- hardware opcode handlers (invoked from VM_STEP cases) ---
 void hw_set_sprites_visible(uint8_t mode);        // 0x51
@@ -64,6 +68,14 @@ int hw_fade_step(uint8_t flags);
 // generator) and wait for A. Returns 1 once dismissed. `text` follows the opcode
 // inline (null-terminated) in the bytecode.
 int hw_text_step(const char* text);
+// --- dialogue overlay window box (M4d) ---
+// A Butano panel drawn behind the dialogue text. The box spans the screen width and
+// sits at the bottom; its height is derived from the GBVM overlay Y (rows from the
+// top of an 18-row GB screen, so 18 = fully hidden, 14 = a 4-row box at the bottom).
+// These set the box target only (non-blocking); hw_overlay_update animates the slide.
+void hw_overlay_move_to(int x, int y, int speed); // 0x91  speed: -1 in, -2 out, -3 instant
+void hw_overlay_show(int x, int y, int color);    // 0x92  show the box at row y (instant)
+void hw_overlay_hide(void);                        // 0x93  hide the box (instant)
 
 #ifdef __cplusplus
 }
