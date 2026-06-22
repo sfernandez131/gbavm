@@ -60,6 +60,14 @@ namespace
     bn::optional<bn::sprite_text_generator> text_gen;  // dialogue text (Butano font)
     bn::vector<bn::sprite_ptr, 48> text_sprites;
     bool text_showing = false;
+    // Typewriter reveal (M4e): the line is revealed char-by-char over frames. A
+    // press fast-forwards to the full line; once full, A dismisses (see hw_text_step).
+    constexpr int REVEAL_FRAMES = 2;             // frames per revealed character (~30/s)
+    char text_buf[40];                           // the clamped line being revealed
+    int text_len = 0;                            // total chars in text_buf
+    int text_revealed = 0;                       // chars shown so far
+    int reveal_timer = 0;                        // frames since the last char appeared
+    int text_rendered = -1;                      // revealed count last drawn (skip redundant redraws)
 
     // --- dialogue overlay window box (M4d) ---
     // A solid bg panel clipped by an internal rect window to a bottom strip, drawn
@@ -321,8 +329,10 @@ int hw_fade_step(uint8_t flags)
 
 int hw_text_step(const char* text)
 {
-    // Render the dialogue line via Butano's text generator and hold until A. Long
-    // lines are clamped to what fits in the sprite vector so generate() can't assert.
+    // Reveal the dialogue line char-by-char via Butano's text generator (typewriter),
+    // then hold until A. The line is clamped to what fits in the sprite vector so
+    // generate() can't assert. Called every frame with the same `text` (op 0x90 rewinds
+    // its PC until this returns 1), so the reveal state persists across calls.
     if(!text_gen)
     {
         text_gen = bn::sprite_text_generator(common::variable_8x16_sprite_font);
@@ -331,22 +341,48 @@ int hw_text_step(const char* text)
     }
     if(!text_showing)
     {
-        text_sprites.clear();
-        char line[40];
+        // Latch the line into a stable buffer and start with nothing revealed.
         int n = 0;
-        for(; text && text[n] && n < (int)sizeof(line) - 1; ++n) line[n] = text[n];
-        line[n] = '\0';
-        text_gen->generate(-112, 52, line, text_sprites);
+        for(; text && text[n] && n < (int)sizeof(text_buf) - 1; ++n) text_buf[n] = text[n];
+        text_buf[n] = '\0';
+        text_len = n;
+        text_revealed = 0;
+        reveal_timer = 0;
+        text_rendered = -1;
+        text_sprites.clear();
         text_showing = true;
-        return 0; // wait for the player to dismiss
     }
-    if(bn::keypad::a_pressed())
+    if(text_revealed < text_len)
     {
+        // Still typing: A fast-forwards to the full line; otherwise tick the timer.
+        if(bn::keypad::a_pressed())
+        {
+            text_revealed = text_len;
+        }
+        else if(++reveal_timer >= REVEAL_FRAMES)
+        {
+            reveal_timer = 0;
+            ++text_revealed;
+        }
+    }
+    else if(bn::keypad::a_pressed())
+    {
+        // Fully revealed and A pressed: dismiss.
         text_sprites.clear();
         text_showing = false;
-        return 1; // dismissed
+        return 1;
     }
-    return 0;
+    // Redraw only when the revealed count changed (avoids rebuilding sprites each frame).
+    if(text_revealed != text_rendered)
+    {
+        char shown[sizeof(text_buf)];
+        for(int i = 0; i < text_revealed; ++i) shown[i] = text_buf[i];
+        shown[text_revealed] = '\0';
+        text_sprites.clear();
+        text_gen->generate(-112, 52, shown, text_sprites);
+        text_rendered = text_revealed;
+    }
+    return 0; // keep waiting (still typing, or revealed and waiting for A)
 }
 
 void hw_actor_activate(int16_t id)
