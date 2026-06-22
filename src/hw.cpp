@@ -62,13 +62,38 @@ namespace
     bool text_showing = false;
     // Typewriter reveal (M4e): the line is revealed char-by-char over frames. A
     // press fast-forwards to the full line; once full, A dismisses (see hw_text_step).
-    constexpr int REVEAL_FRAMES = 2;             // frames per revealed character (~30/s)
-    char text_buf[64];                           // the clamped text being revealed (multi-line)
+    constexpr int REVEAL_FRAMES = 2;             // default frames per character (~30/s; no speed code)
+    char text_buf[64];                           // the clamped text being revealed (multi-line, w/ codes)
     int text_len = 0;                            // total bytes in text_buf
-    int text_revealed = 0;                       // bytes shown so far
+    int text_revealed = 0;                       // bytes consumed so far (incl. control codes)
     int text_lines = 1;                          // number of '\n'-separated lines (M4f)
     int reveal_timer = 0;                        // frames since the last char appeared
+    int reveal_frames = REVEAL_FRAMES;           // current per-char delay (set by \001 speed codes, M4g)
     int text_rendered = -1;                      // revealed count last drawn (skip redundant redraws)
+
+    // Set-speed text code (M4g): GB Studio's \001<n> sets the typewriter rate. n is
+    // speed+1; speed indexes ui_time_masks (ported from gbvm ui_a.s) and the engine
+    // draws a char when (game_time & mask)==0, i.e. mask+1 frames/char. Speed 0 is
+    // instant (the whole line at once). Returns frames/char (0 = instant).
+    int speed_to_frames(int param)
+    {
+        static const uint8_t ui_time_masks[8] = { 0, 0, 1, 3, 7, 15, 31, 63 };
+        const int speed = (param - 1) & 7;
+        return speed == 0 ? 0 : (ui_time_masks[speed] + 1);
+    }
+    // Consume any \001 set-speed codes at the reveal cursor (each is the code byte +
+    // a param byte), applying the new rate. Control codes are instant (no reveal tick)
+    // and are skipped when rendering glyphs, so the cursor steps past them here.
+    void consume_text_codes()
+    {
+        while(text_revealed < text_len && text_buf[text_revealed] == 0x01)
+        {
+            const int param = (text_revealed + 1 < text_len)
+                                ? (uint8_t)text_buf[text_revealed + 1] : 2;
+            reveal_frames = speed_to_frames(param);
+            text_revealed += 2;
+        }
+    }
     // Dialogue text layout (M4f): bottom-align the N-line block inside the box so the
     // box keeps a steady bottom margin regardless of line count (1 line -> y=52).
     constexpr int TEXT_X = -112;                 // left edge (screen x; box is full-width)
@@ -360,9 +385,11 @@ int hw_text_step(const char* text)
         text_lines = lines;
         text_revealed = 0;
         reveal_timer = 0;
+        reveal_frames = REVEAL_FRAMES;   // default until a \001 speed code changes it
         text_rendered = -1;
         text_sprites.clear();
         text_showing = true;
+        consume_text_codes();            // apply any leading speed code before char 1
         // Size the box to fit this text: our 16px font needs more height than GB
         // Studio's 8px-row box math gives for 2+ lines, so override the box target
         // here (the script's overlay slide still controls show/hide). 1 line keeps
@@ -372,15 +399,17 @@ int hw_text_step(const char* text)
     }
     if(text_revealed < text_len)
     {
-        // Still typing: A fast-forwards to the full line; otherwise tick the timer.
-        if(bn::keypad::a_pressed())
+        // Still typing: A fast-forwards to the full line; speed 0 reveals instantly;
+        // otherwise tick the timer, revealing one char and consuming any codes after it.
+        if(bn::keypad::a_pressed() || reveal_frames <= 0)
         {
             text_revealed = text_len;
         }
-        else if(++reveal_timer >= REVEAL_FRAMES)
+        else if(++reveal_timer >= reveal_frames)
         {
             reveal_timer = 0;
             ++text_revealed;
+            consume_text_codes(); // apply inline speed codes following this char
         }
     }
     else if(bn::keypad::a_pressed())
@@ -393,9 +422,16 @@ int hw_text_step(const char* text)
     // Redraw only when the revealed count changed (avoids rebuilding sprites each frame).
     if(text_revealed != text_rendered)
     {
+        // Copy the revealed bytes, skipping the \001 set-speed codes + their params
+        // (they control timing, not glyphs), so only printable + newline remain.
         char shown[sizeof(text_buf)];
-        for(int i = 0; i < text_revealed; ++i) shown[i] = text_buf[i];
-        shown[text_revealed] = '\0';
+        int s = 0;
+        for(int i = 0; i < text_revealed; ++i)
+        {
+            if(text_buf[i] == 0x01) { ++i; continue; } // skip code + its param byte
+            shown[s++] = text_buf[i];
+        }
+        shown[s] = '\0';
         text_sprites.clear();
         // Render each '\n'-separated line on its own row, bottom-aligned so the box
         // keeps a steady bottom margin (the box itself is sized taller for more lines).
