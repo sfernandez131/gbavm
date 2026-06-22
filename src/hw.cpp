@@ -63,11 +63,18 @@ namespace
     // Typewriter reveal (M4e): the line is revealed char-by-char over frames. A
     // press fast-forwards to the full line; once full, A dismisses (see hw_text_step).
     constexpr int REVEAL_FRAMES = 2;             // frames per revealed character (~30/s)
-    char text_buf[40];                           // the clamped line being revealed
-    int text_len = 0;                            // total chars in text_buf
-    int text_revealed = 0;                       // chars shown so far
+    char text_buf[64];                           // the clamped text being revealed (multi-line)
+    int text_len = 0;                            // total bytes in text_buf
+    int text_revealed = 0;                       // bytes shown so far
+    int text_lines = 1;                          // number of '\n'-separated lines (M4f)
     int reveal_timer = 0;                        // frames since the last char appeared
     int text_rendered = -1;                      // revealed count last drawn (skip redundant redraws)
+    // Dialogue text layout (M4f): bottom-align the N-line block inside the box so the
+    // box keeps a steady bottom margin regardless of line count (1 line -> y=52).
+    constexpr int TEXT_X = -112;                 // left edge (screen x; box is full-width)
+    constexpr int TEXT_LINE_H = 16;              // line pitch (the 8x16 font is 16px tall)
+    constexpr int TEXT_TOP_PAD = 4;              // px between the box top and the first line
+    constexpr int TEXT_BOTTOM_MARGIN = 12;       // px between the last line and the screen bottom
 
     // --- dialogue overlay window box (M4d) ---
     // A solid bg panel clipped by an internal rect window to a bottom strip, drawn
@@ -341,16 +348,27 @@ int hw_text_step(const char* text)
     }
     if(!text_showing)
     {
-        // Latch the line into a stable buffer and start with nothing revealed.
-        int n = 0;
-        for(; text && text[n] && n < (int)sizeof(text_buf) - 1; ++n) text_buf[n] = text[n];
+        // Latch the text into a stable buffer and start with nothing revealed.
+        int n = 0, lines = 1;
+        for(; text && text[n] && n < (int)sizeof(text_buf) - 1; ++n)
+        {
+            text_buf[n] = text[n];
+            if(text[n] == '\n') ++lines; // count lines for the bottom-aligned layout
+        }
         text_buf[n] = '\0';
         text_len = n;
+        text_lines = lines;
         text_revealed = 0;
         reveal_timer = 0;
         text_rendered = -1;
         text_sprites.clear();
         text_showing = true;
+        // Size the box to fit this text: our 16px font needs more height than GB
+        // Studio's 8px-row box math gives for 2+ lines, so override the box target
+        // here (the script's overlay slide still controls show/hide). 1 line keeps
+        // the same 32px box as before; each extra line adds TEXT_LINE_H.
+        overlay_init();
+        box_top_target = SCREEN_BOTTOM - (lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
     }
     if(text_revealed < text_len)
     {
@@ -379,7 +397,22 @@ int hw_text_step(const char* text)
         for(int i = 0; i < text_revealed; ++i) shown[i] = text_buf[i];
         shown[text_revealed] = '\0';
         text_sprites.clear();
-        text_gen->generate(-112, 52, shown, text_sprites);
+        // Render each '\n'-separated line on its own row, bottom-aligned so the box
+        // keeps a steady bottom margin (the box itself is sized taller for more lines).
+        int y = SCREEN_BOTTOM - text_lines * TEXT_LINE_H - TEXT_BOTTOM_MARGIN;
+        int start = 0;
+        for(int i = 0;; ++i)
+        {
+            if(shown[i] == '\n' || shown[i] == '\0')
+            {
+                const char end = shown[i];
+                shown[i] = '\0';
+                text_gen->generate(TEXT_X, y, &shown[start], text_sprites);
+                y += TEXT_LINE_H;
+                if(end == '\0') break;
+                start = i + 1;
+            }
+        }
         text_rendered = text_revealed;
     }
     return 0; // keep waiting (still typing, or revealed and waiting for A)
