@@ -27,6 +27,7 @@
 #include "common_variable_8x16_sprite_font.h"
 
 #include "bn_sprite_items_hero.h"
+#include "bn_sprite_items_dialogue_frame.h" // committed asset: 2px frame line (top border)
 #include "bn_regular_bg_items_dialogue_panel.h" // committed asset: solid dialogue panel bg
 #include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
 
@@ -122,6 +123,11 @@ namespace
     constexpr int SCREEN_BOTTOM = 80;            // Butano y of the screen's bottom edge
     constexpr int OVERLAY_SLIDE_PX = 6;          // default slide speed (px/frame)
     bn::optional<bn::regular_bg_ptr> panel_bg;   // the dialogue panel (lazily created)
+    // M4j: a light 2px line capping the box top edge (a GB-Studio-style frame). The
+    // box is full-width, so the top is its only visible interior edge; four 64px
+    // line sprites span it, repositioned to box_top each frame.
+    bn::vector<bn::sprite_ptr, 4> frame_sprites; // top border, left-to-right
+    static const int FRAME_SEG_X[4] = { -96, -32, 32, 96 }; // centres covering -120..120
     bool overlay_inited = false;
     bn::fixed box_top = SCREEN_BOTTOM;           // current window top (y); 80 = hidden
     bn::fixed box_top_target = SCREEN_BOTTOM;    // target top the box slides toward
@@ -147,6 +153,14 @@ namespace
         panel_bg->set_priority(2);               // scene bg = 3, text sprites = bg_priority 1
         panel_bg->set_visible(false);
         bn::window::outside().set_show_bg(*panel_bg, false); // panel only inside the box rect
+        // The top-border line sprites: priority 1 (in front of the panel), hidden until shown.
+        for(int i = 0; i < 4; ++i)
+        {
+            bn::sprite_ptr s = bn::sprite_items::dialogue_frame.create_sprite(FRAME_SEG_X[i], 0);
+            s.set_bg_priority(1);
+            s.set_visible(false);
+            frame_sprites.push_back(s);
+        }
         overlay_inited = true;
     }
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
@@ -343,15 +357,17 @@ void hw_overlay_update(void)
         box_top -= box_slide_px;
         if(box_top < box_top_target) box_top = box_top_target;
     }
-    // Show the panel only while the box has height; clip it to the bottom strip.
-    if(box_top >= SCREEN_BOTTOM)
-    {
-        panel_bg->set_visible(false);
-    }
-    else
-    {
-        panel_bg->set_visible(true);
+    // Show the panel + top-border line only while the box has height.
+    const bool visible = box_top < SCREEN_BOTTOM;
+    panel_bg->set_visible(visible);
+    if(visible)
         bn::rect_window::internal().set_boundaries(box_top, -HALF_W, SCREEN_BOTTOM, HALF_W);
+    // The frame line's 2px stripe sits at the top of the 32px sprite, so centre it
+    // box_top + 16 to cap the panel's top edge; the sprites track the slide.
+    for(bn::sprite_ptr& s : frame_sprites)
+    {
+        s.set_visible(visible);
+        if(visible) s.set_y(box_top + 16);
     }
 }
 
