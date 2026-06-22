@@ -43,6 +43,7 @@ int main()
             gba_load_scene(vm_get_exception_param());
         }
         hw_player_update();     // d-pad -> player (actor 0) movement, when enabled
+        hw_overlay_update();    // animate the dialogue overlay window box (slide in/out)
         hw_render();            // push actor state into sprites
         sys_time++;
         bn::core::update();
