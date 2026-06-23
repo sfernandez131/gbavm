@@ -72,6 +72,7 @@ namespace
     int reveal_timer = 0;                        // frames since the last char appeared
     int reveal_frames = REVEAL_FRAMES;           // current per-char delay (set by \001 speed codes, M4g)
     int text_rendered = -1;                      // revealed count last drawn (skip redundant redraws)
+    const char* last_text = nullptr;             // last display-op text ptr (detects a new op vs a rewind)
 
     // Set-speed text code (M4g): GB Studio's \001<n> sets the typewriter rate. n is
     // speed+1; speed indexes ui_time_masks (ported from gbvm ui_a.s) and the engine
@@ -97,6 +98,49 @@ namespace
         if(v < 0 && n < max) out[n++] = '-';
         for(int p = digits; p < width && n < max; ++p) out[n++] = '0'; // leading zeros
         while(t > 0 && n < max) out[n++] = tmp[--t];
+        return n;
+    }
+
+    // Substitute %d/%D<w>/%c/%% placeholders from `values` into text_buf starting at
+    // offset `n` (the rest of text is copied verbatim, incl. \001/\002 codes + \n), up
+    // to the buffer cap. Adds any '\n' count to *lines. Returns the new length. Used for
+    // both the fresh latch (n=0) and !W: append (n=text_len). Each chunk's values are
+    // its own, so the value cursor restarts at 0.
+    int subst_text(const char* text, const int16_t* values, int n_values, int n, int* lines)
+    {
+        const int cap = (int)sizeof(text_buf) - 1;
+        int vi = 0;
+        for(int i = 0; text && text[i] && n < cap; )
+        {
+            if(text[i] == '%' && text[i + 1] == 'd' && vi < n_values)
+            {
+                n += format_dec(values[vi++], 0, &text_buf[n], cap - n);
+                i += 2;
+            }
+            else if(text[i] == '%' && text[i + 1] == 'D' && vi < n_values)
+            {
+                int w = 0, j = i + 2;
+                while(text[j] >= '0' && text[j] <= '9') { w = w * 10 + (text[j] - '0'); ++j; }
+                n += format_dec(values[vi++], w, &text_buf[n], cap - n);
+                i = j;
+            }
+            else if(text[i] == '%' && text[i + 1] == 'c' && vi < n_values)
+            {
+                text_buf[n++] = (char)(values[vi++] & 0xff); // value as a character code
+                i += 2;
+            }
+            else if(text[i] == '%' && text[i + 1] == '%')
+            {
+                text_buf[n++] = '%';
+                i += 2;
+            }
+            else
+            {
+                if(text[i] == '\n') ++(*lines);
+                text_buf[n++] = text[i++];
+            }
+        }
+        text_buf[n] = '\0';
         return n;
     }
 
@@ -355,6 +399,15 @@ void hw_overlay_move_to(int x, int y, int speed)
     box_top_target = overlay_top_for_row(y);
     box_slide_px = (speed > 0) ? speed : OVERLAY_SLIDE_PX; // negatives are sentinels
     if(speed == -3) box_top = box_top_target;              // .OVERLAY_SPEED_INSTANT
+    // M4q: hiding the box (e.g. the dialogue's slide-out) ends the text, so clear the
+    // glyphs + avatar (they aren't window-clipped) and reset for the next display op.
+    if(box_top_target >= SCREEN_BOTTOM)
+    {
+        text_sprites.clear();
+        avatar_sprite.reset();
+        text_showing = false;
+        last_text = nullptr;
+    }
 }
 
 void hw_overlay_show(int x, int y, int color)
@@ -368,9 +421,30 @@ void hw_overlay_show(int x, int y, int color)
 
 void hw_overlay_hide(void)
 {
-    // Snap the box off the bottom of the screen.
+    // Snap the box off the bottom of the screen + clear its text (M4q).
     box_top_target = SCREEN_BOTTOM;
     box_top = SCREEN_BOTTOM;
+    text_sprites.clear();
+    avatar_sprite.reset();
+    text_showing = false;
+    last_text = nullptr;
+}
+
+// VM_OVERLAY_WAIT (M4q): return 1 once every requested UI condition is met, else 0 so
+// the VM blocks (rewinds + yields). This is where dialogue waits for A now (the display
+// op only reveals): the wait flags are .UI_WAIT_WINDOW (box finished sliding),
+// .UI_WAIT_TEXT (text fully revealed), .UI_WAIT_BTN_A/_B/_ANY (button press).
+int hw_overlay_wait(int condition)
+{
+    bool ok = true;
+    if(condition & 0x01) ok = ok && (box_top == box_top_target);   // UI_WAIT_WINDOW
+    if(condition & 0x02) ok = ok && (text_revealed >= text_len);   // UI_WAIT_TEXT
+    if(condition & 0x04) ok = ok && bn::keypad::a_pressed();        // UI_WAIT_BTN_A
+    if(condition & 0x08) ok = ok && bn::keypad::b_pressed();        // UI_WAIT_BTN_B
+    if(condition & 0x10)                                            // UI_WAIT_BTN_ANY
+        ok = ok && (bn::keypad::a_pressed() || bn::keypad::b_pressed() ||
+                    bn::keypad::start_pressed() || bn::keypad::select_pressed());
+    return ok ? 1 : 0;
 }
 
 void hw_overlay_update(void)
@@ -419,84 +493,64 @@ int hw_fade_step(uint8_t flags)
     return done;
 }
 
-int hw_text_step(const char* text, const int16_t* values, int n_values, int avatar)
+int hw_text_step(const char* text, const int16_t* values, int n_values, int avatar, int preserve)
 {
-    // Reveal the dialogue line char-by-char via Butano's text generator (typewriter),
-    // then hold until A. The line is clamped to what fits in the sprite vector so
-    // generate() can't assert. Called every frame with the same `text` (op 0x90 rewinds
-    // its PC until this returns 1), so the reveal state persists across calls.
-    if(!text_showing)
+    // Reveal the dialogue text char-by-char (typewriter), returning 1 once it is fully
+    // revealed (on a previous frame) so the VM advances to VM_OVERLAY_WAIT, which now
+    // owns the A-wait (M4q). The op rewinds its PC until we return 1, so the reveal
+    // state persists across calls; `text != last_text` marks a NEW display op (vs a
+    // rewind) to latch fresh, or to append when `preserve` (VM_DISPLAY_TEXT_EX) for !W:.
+    if(text != last_text)
     {
-        // Latch the text into a stable buffer, substituting each %d placeholder with
-        // each variable placeholder with the next variable's value (M4i/M4k): %d =
-        // decimal, %D<w> = decimal zero-padded to width w, %c = the value as a char;
-        // %% = a literal %. Speed codes (\001) are copied verbatim for the typewriter.
-        int n = 0, lines = 1, vi = 0;
-        const int cap = (int)sizeof(text_buf) - 1;
-        for(int i = 0; text && text[i] && n < cap; )
+        last_text = text;
+        if(preserve && text_showing)
         {
-            if(text[i] == '%' && text[i + 1] == 'd' && vi < n_values)
-            {
-                n += format_dec(values[vi++], 0, &text_buf[n], cap - n);
-                i += 2;
-            }
-            else if(text[i] == '%' && text[i + 1] == 'D' && vi < n_values)
-            {
-                int w = 0, j = i + 2;
-                while(text[j] >= '0' && text[j] <= '9') { w = w * 10 + (text[j] - '0'); ++j; }
-                n += format_dec(values[vi++], w, &text_buf[n], cap - n);
-                i = j;
-            }
-            else if(text[i] == '%' && text[i + 1] == 'c' && vi < n_values)
-            {
-                text_buf[n++] = (char)(values[vi++] & 0xff); // value as a character code
-                i += 2;
-            }
-            else if(text[i] == '%' && text[i + 1] == '%')
-            {
-                text_buf[n++] = '%';
-                i += 2;
-            }
-            else
-            {
-                if(text[i] == '\n') ++lines; // count lines for the bottom-aligned layout
-                text_buf[n++] = text[i++];
-            }
-        }
-        text_buf[n] = '\0';
-        text_len = n;
-        text_lines = lines;
-        text_revealed = 0;
-        reveal_timer = 0;
-        reveal_frames = REVEAL_FRAMES;   // default until a \001 speed code changes it
-        text_rendered = -1;
-        text_sprites.clear();
-        text_showing = true;
-        consume_text_codes();            // apply any leading speed code before char 1
-        // Avatar portrait (M4m): draw the sprite at the box's lower-left and shift the
-        // text right to clear it; no avatar (0xFF) keeps the text at its normal x.
-        const bn::sprite_item* av = (avatar != 0xff) ? gba_avatar_sprite(avatar) : nullptr;
-        if(av)
-        {
-            avatar_sprite = av->create_sprite(AVATAR_X, AVATAR_Y);
-            avatar_sprite->set_bg_priority(1); // in front of the panel, like the text
-            text_x = TEXT_X + AVATAR_TEXT_SHIFT;
+            // !W: append this chunk, continuing the typewriter into the new text. Each
+            // chunk carries its own %d values; resume revealing from where we stopped.
+            int lines = text_lines;
+            text_len = subst_text(text, values, n_values, text_len, &lines);
+            text_lines = lines;
+            text_rendered = -1;
+            box_top_target = SCREEN_BOTTOM - (lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
         }
         else
         {
-            avatar_sprite.reset();
-            text_x = TEXT_X;
+            // Fresh: latch the text (substituting %d/%D/%c/%%), (re)create the avatar
+            // portrait, and size the box. Speed/font codes are copied verbatim.
+            int lines = 1;
+            text_len = subst_text(text, values, n_values, 0, &lines);
+            text_lines = lines;
+            text_revealed = 0;
+            reveal_timer = 0;
+            reveal_frames = REVEAL_FRAMES;   // default until a \001 speed code changes it
+            text_rendered = -1;
+            text_sprites.clear();
+            text_showing = true;
+            consume_text_codes();            // apply any leading speed code before char 1
+            // Avatar portrait (M4m): draw the sprite at the box's lower-left and shift
+            // the text right to clear it; no avatar (0xFF) keeps the text at its normal x.
+            const bn::sprite_item* av = (avatar != 0xff) ? gba_avatar_sprite(avatar) : nullptr;
+            if(av)
+            {
+                avatar_sprite = av->create_sprite(AVATAR_X, AVATAR_Y);
+                avatar_sprite->set_bg_priority(1); // in front of the panel, like the text
+                text_x = TEXT_X + AVATAR_TEXT_SHIFT;
+            }
+            else
+            {
+                avatar_sprite.reset();
+                text_x = TEXT_X;
+            }
+            // Size the box to fit this text (TEXT_LINE_H pitch keeps it tall enough for
+            // the avatar); the script's overlay slide still controls show/hide.
+            overlay_init();
+            box_top_target = SCREEN_BOTTOM - (lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
         }
-        // Size the box to fit this text: we use a TEXT_LINE_H pitch (taller than GB
-        // Studio's 8px rows) so the box stays tall enough for the avatar and gives the
-        // 8px font breathing room, so override the box target here (the script's overlay
-        // slide still controls show/hide). Each extra line adds TEXT_LINE_H.
-        overlay_init();
-        box_top_target = SCREEN_BOTTOM - (lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
     }
+    const bool was_revealed = (text_revealed >= text_len); // already done on a prior frame?
     if(text_revealed < text_len)
     {
-        // Still typing: A fast-forwards to the full line; speed 0 reveals instantly;
+        // Still typing: A fast-forwards to the full text; speed 0 reveals instantly;
         // otherwise tick the timer, revealing one char and consuming any codes after it.
         if(bn::keypad::a_pressed() || reveal_frames <= 0)
         {
@@ -508,14 +562,6 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
             ++text_revealed;
             consume_text_codes(); // apply inline speed codes following this char
         }
-    }
-    else if(bn::keypad::a_pressed())
-    {
-        // Fully revealed and A pressed: dismiss.
-        text_sprites.clear();
-        avatar_sprite.reset();
-        text_showing = false;
-        return 1;
     }
     // Redraw only when the revealed count changed (avoids rebuilding sprites each frame).
     if(text_revealed != text_rendered)
@@ -570,7 +616,10 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
         }
         text_rendered = text_revealed;
     }
-    return 0; // keep waiting (still typing, or revealed and waiting for A)
+    // Done once fully revealed on a PRIOR frame: the VM advances to VM_OVERLAY_WAIT.
+    // (Returning the frame after completion, not the same frame, keeps the A press that
+    // fast-forwarded the typewriter from also satisfying the following A-wait.)
+    return was_revealed ? 1 : 0;
 }
 
 void hw_actor_activate(int16_t id)

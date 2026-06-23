@@ -6,13 +6,18 @@
 
 #include "gba_natives.h"
 
-// _wait_frames(n): the "Wait" event. stack_frame[0] holds the countdown; the VM
-// re-invokes this each frame (waitable yields the quant) until it hits 0. Mirrors
-// GBVM's wait_frames - post-decrement, so wait completes the frame the count is 0.
+// _wait_frames(n): the "Wait" event. The VM re-invokes this each frame (waitable yields
+// the quant) until the countdown hits 0. Mirrors GBVM's wait_frames: keep the countdown
+// in a scratch slot just past the data stack (no interrupts -> not spoiled), resetting it
+// on `start`, and leave the arg (stack_frame[0]) UNTOUCHED. GB Studio skips re-setting the
+// count for equal consecutive waits (e.g. dialogue !W: chunks), reusing the arg, so
+// destroying it (the old post-decrement on stack_frame[0]) made the 2nd wait underflow to
+// ~65535 frames and appear to hang. M4q surfaced this.
 UBYTE wait_frames(void * THIS, UBYTE start, UWORD * stack_frame) {
-    (void)start;
-    ((SCRIPT_CTX *)THIS)->waitable = TRUE;
-    return (UBYTE)(stack_frame[0]-- == 0);
+    SCRIPT_CTX * ctx = (SCRIPT_CTX *)THIS;
+    if (start) *ctx->stack_ptr = stack_frame[0] + 1; // +1: pre-decrement below
+    if ((--*ctx->stack_ptr) != 0) { ctx->waitable = TRUE; return (UBYTE)FALSE; }
+    return (UBYTE)TRUE;
 }
 
 // _camera_shake_frames: gbavm has no camera yet, so complete immediately - the

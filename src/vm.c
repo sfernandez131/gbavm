@@ -499,10 +499,11 @@ static const UBYTE vm_args_len[256] = {
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
     [0x57]=1, [0x5D]=1,
-    // dialogue text (M4): VM_DISPLAY_TEXT -> show text + wait for A (no operands)
-    [0x90]=0,
+    // dialogue text (M4): VM_DISPLAY_TEXT/_EX carry their text inline (variable length)
+    [0x90]=0, [0x95]=0,
     // dialogue overlay window box (M4d): MOVE_TO x,y,speed; SHOW x,y,color,options; HIDE
-    [0x91]=3, [0x92]=4, [0x93]=0,
+    // M4q: OVERLAY_WAIT modal,condition
+    [0x91]=3, [0x92]=4, [0x93]=0, [0x94]=2,
 };
 
 // little-endian fixed-argument readers
@@ -590,14 +591,18 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // (rewind past opcode + its 1-byte flags operand, then yield).
         case 0x57: if (!hw_fade_step(A_U8(0))) { THIS->PC -= (INSTRUCTION_SIZE + 1); THIS->waitable = TRUE; } break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
-        // VM_DISPLAY_TEXT: show the inline null-terminated dialogue text and block
-        // until A dismisses it; on completion skip past the text bytes + terminator.
-        case 0x90: {
+        // VM_DISPLAY_TEXT (0x90) / VM_DISPLAY_TEXT_EX (0x95): reveal the inline dialogue
+        // text; block (rewind) until fully revealed, then advance. The A-wait is now a
+        // separate VM_OVERLAY_WAIT (M4q). 0x95 has a leading display-flag byte (bit 0 =
+        // .DISPLAY_PRESERVE_POS = append the chunk for !W: waits).
+        case 0x90:
+        case 0x95: {
+            const UBYTE *p = a;
+            UBYTE preserve = 0;
+            if (op == 0x95) preserve = (UBYTE)((*p++) & 1); // display flag (preserve-pos)
             // Payload: avatar byte (0xff = none, M4m), var-count, then count 16-bit
             // script_memory indices, then the null-terminated text. Resolve each
-            // variable's value for the text's %d placeholders (M4i interpolation),
-            // then render (with the avatar) + wait for A.
-            const UBYTE *p = a;
+            // variable's value for the text's %d placeholders (M4i interpolation).
             UBYTE avatar = *p++;
             UBYTE nvars = *p++;
             INT16 vals[8];
@@ -607,17 +612,20 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
                 if (i < 8) vals[i] = (INT16)script_memory[idx];
             }
             const char *txt = (const char *)p;
-            if (hw_text_step(txt, vals, nvars, avatar)) {
+            if (hw_text_step(txt, vals, nvars, avatar, preserve)) {
                 UWORD len = 0; while (txt[len]) len++;
-                THIS->PC += (UWORD)(2 + nvars * 2 + len + 1);
+                // skip flag(0x95 only) + avatar + nvars + var indices + text + terminator
+                THIS->PC += (UWORD)((op == 0x95 ? 3 : 2) + nvars * 2 + len + 1);
             } else { THIS->PC -= INSTRUCTION_SIZE; THIS->waitable = TRUE; }
             break;
         }
-        // Dialogue overlay window box (M4d): non-blocking; the box slides via
-        // hw_overlay_update each frame. The text op (0x90) still owns the A-wait.
+        // Dialogue overlay window box (M4d): MOVE_TO/SHOW/HIDE set the box target (the box
+        // slides via hw_overlay_update each frame). VM_OVERLAY_WAIT (M4q) blocks until its
+        // UI conditions; this is where dialogue waits for A.
         case 0x91: hw_overlay_move_to(A_U8(0), A_U8(1), A_I8(2)); break;
         case 0x92: hw_overlay_show(A_U8(0), A_U8(1), A_U8(2)); break;
         case 0x93: hw_overlay_hide(); break;
+        case 0x94: if (!hw_overlay_wait(A_U8(1))) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; } break;
         // Scene stack: push saves the current scene; pop/pop_all signal a scene
         // change (like VM_RAISE CHANGE_SCENE) to the popped scene.
         case 0x68: gba_scene_push(); break;

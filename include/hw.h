@@ -69,7 +69,12 @@ int hw_fade_step(uint8_t flags);
 // inline (null-terminated) in the bytecode. `values`/`n_values` are the variable
 // values substituted for the text's %d placeholders (M4i); pass NULL/0 for plain text.
 // `avatar` is the dialogue avatar index to draw beside the text, or 0xFF for none (M4m).
-int hw_text_step(const char* text, const int16_t* values, int n_values, int avatar);
+// `preserve` (M4q): non-zero = VM_DISPLAY_TEXT_EX append (continue the existing box for
+// !W: wait chunks); 0 = a fresh display. Returns 1 once the text is fully revealed.
+int hw_text_step(const char* text, const int16_t* values, int n_values, int avatar, int preserve);
+// VM_OVERLAY_WAIT (M4q): blocks until the requested UI conditions (window/text/button);
+// owns the dialogue A-wait. Returns 1 when satisfied, 0 to keep waiting.
+int hw_overlay_wait(int condition);
 // --- dialogue overlay window box (M4d) ---
 // A Butano panel drawn behind the dialogue text. The box spans the screen width and
 // sits at the bottom; its height is derived from the GBVM overlay Y (rows from the
