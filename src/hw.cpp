@@ -82,16 +82,19 @@ namespace
         const int speed = (param - 1) & 7;
         return speed == 0 ? 0 : (ui_time_masks[speed] + 1);
     }
-    // Write a signed value as decimal into `out` (up to `max` chars). Returns the
-    // number of chars written. Used to substitute %d placeholders (M4i interpolation).
-    int format_dec(int v, char* out, int max)
+    // Write a signed value as decimal into `out` (up to `max` chars), padded to at
+    // least `width` characters with leading zeros (width 0 = no padding). Returns the
+    // number of chars written. Substitutes %d (width 0) and %D<width> placeholders.
+    int format_dec(int v, int width, char* out, int max)
     {
         char tmp[8];
         int t = 0;
         unsigned int u = (v < 0) ? (unsigned int)(-v) : (unsigned int)v;
         do { tmp[t++] = (char)('0' + (u % 10)); u /= 10; } while(u && t < (int)sizeof(tmp));
+        const int digits = t + (v < 0 ? 1 : 0);  // incl. the sign
         int n = 0;
         if(v < 0 && n < max) out[n++] = '-';
+        for(int p = digits; p < width && n < max; ++p) out[n++] = '0'; // leading zeros
         while(t > 0 && n < max) out[n++] = tmp[--t];
         return n;
     }
@@ -404,15 +407,28 @@ int hw_text_step(const char* text, const int16_t* values, int n_values)
     if(!text_showing)
     {
         // Latch the text into a stable buffer, substituting each %d placeholder with
-        // the next variable's decimal value (M4i) and %% with a literal %. Speed codes
-        // (\001) are copied verbatim for the typewriter to consume.
+        // each variable placeholder with the next variable's value (M4i/M4k): %d =
+        // decimal, %D<w> = decimal zero-padded to width w, %c = the value as a char;
+        // %% = a literal %. Speed codes (\001) are copied verbatim for the typewriter.
         int n = 0, lines = 1, vi = 0;
         const int cap = (int)sizeof(text_buf) - 1;
         for(int i = 0; text && text[i] && n < cap; )
         {
             if(text[i] == '%' && text[i + 1] == 'd' && vi < n_values)
             {
-                n += format_dec(values[vi++], &text_buf[n], cap - n);
+                n += format_dec(values[vi++], 0, &text_buf[n], cap - n);
+                i += 2;
+            }
+            else if(text[i] == '%' && text[i + 1] == 'D' && vi < n_values)
+            {
+                int w = 0, j = i + 2;
+                while(text[j] >= '0' && text[j] <= '9') { w = w * 10 + (text[j] - '0'); ++j; }
+                n += format_dec(values[vi++], w, &text_buf[n], cap - n);
+                i = j;
+            }
+            else if(text[i] == '%' && text[i + 1] == 'c' && vi < n_values)
+            {
+                text_buf[n++] = (char)(values[vi++] & 0xff); // value as a character code
                 i += 2;
             }
             else if(text[i] == '%' && text[i + 1] == '%')
