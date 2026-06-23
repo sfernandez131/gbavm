@@ -60,8 +60,7 @@ namespace
     bool player_move_enabled = false;            // top-down d-pad control of actor 0
     const uint8_t* collisions = nullptr;         // scene collision grid (one byte/tile)
     int coll_w = 0, coll_h = 0;                  // collision grid size in tiles
-    bn::optional<bn::sprite_text_generator> text_gen;  // dialogue text (Butano font)
-    bn::vector<bn::sprite_ptr, 48> text_sprites;
+    bn::vector<bn::sprite_ptr, 48> text_sprites;       // dialogue text glyph sprites
     bool text_showing = false;
     // Typewriter reveal (M4e): the line is revealed char-by-char over frames. A
     // press fast-forwards to the full line; once full, A dismisses (see hw_text_step).
@@ -106,13 +105,30 @@ namespace
     // and are skipped when rendering glyphs, so the cursor steps past them here.
     void consume_text_codes()
     {
-        while(text_revealed < text_len && text_buf[text_revealed] == 0x01)
+        while(text_revealed < text_len &&
+              (text_buf[text_revealed] == 0x01 || text_buf[text_revealed] == 0x02))
         {
-            const int param = (text_revealed + 1 < text_len)
-                                ? (uint8_t)text_buf[text_revealed + 1] : 2;
-            reveal_frames = speed_to_frames(param);
+            if(text_buf[text_revealed] == 0x01) // set-speed: apply the new rate
+            {
+                const int param = (text_revealed + 1 < text_len)
+                                    ? (uint8_t)text_buf[text_revealed + 1] : 2;
+                reveal_frames = speed_to_frames(param);
+            }
+            // \002 set-font is applied at render time; just step the cursor past it.
             text_revealed += 2;
         }
+    }
+
+    // Render one same-font run of glyphs at (x,y); returns its pixel width so the
+    // caller can advance x to the next segment. A generator is built per run so each
+    // \002 segment can use its own project font (M4p).
+    int render_text_run(int font_idx, int x, int y, const char* run)
+    {
+        bn::sprite_text_generator gen(gba_dialogue_font(font_idx));
+        gen.set_left_alignment();
+        gen.set_bg_priority(1); // in front of the overlay panel (priority 2)
+        gen.generate(x, y, run, text_sprites);
+        return gen.width(run);
     }
     // Dialogue text layout (M4f): bottom-align the N-line block inside the box so the
     // box keeps a steady bottom margin regardless of line count (1 line -> y=52).
@@ -409,12 +425,6 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
     // then hold until A. The line is clamped to what fits in the sprite vector so
     // generate() can't assert. Called every frame with the same `text` (op 0x90 rewinds
     // its PC until this returns 1), so the reveal state persists across calls.
-    if(!text_gen)
-    {
-        text_gen = bn::sprite_text_generator(gba_dialogue_font); // the project's font (M4n)
-        text_gen->set_left_alignment();
-        text_gen->set_bg_priority(1); // in front of the overlay panel (priority 2)
-    }
     if(!text_showing)
     {
         // Latch the text into a stable buffer, substituting each %d placeholder with
@@ -510,31 +520,52 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
     // Redraw only when the revealed count changed (avoids rebuilding sprites each frame).
     if(text_revealed != text_rendered)
     {
-        // Copy the revealed bytes, skipping the \001 set-speed codes + their params
-        // (they control timing, not glyphs), so only printable + newline remain.
+        // Copy the revealed bytes, dropping \001 set-speed codes + their params (timing
+        // only) but KEEPING \002 set-font codes as segment boundaries (and \n as line
+        // boundaries) so the renderer can switch font mid-line.
         char shown[sizeof(text_buf)];
         int s = 0;
         for(int i = 0; i < text_revealed; ++i)
         {
-            if(text_buf[i] == 0x01) { ++i; continue; } // skip code + its param byte
+            if(text_buf[i] == 0x01) { ++i; continue; } // drop speed code + its param byte
             shown[s++] = text_buf[i];
         }
         shown[s] = '\0';
         text_sprites.clear();
-        // Render each '\n'-separated line on its own row, bottom-aligned so the box
-        // keeps a steady bottom margin (the box itself is sized taller for more lines).
+        // Walk the revealed text, rendering each same-font run on its line, bottom-
+        // aligned (the box is sized taller for more lines). \002 switches font and the
+        // x advances by each run's width; \n starts a new line (font persists). The
+        // dialogue starts in the default font (index 0).
         int y = SCREEN_BOTTOM - text_lines * TEXT_LINE_H - TEXT_BOTTOM_MARGIN + TEXT_LINE_OFFSET;
-        int start = 0;
+        int x = text_x;
+        int font_idx = 0;
+        char run[sizeof(text_buf)];
+        int r = 0;
         for(int i = 0;; ++i)
         {
-            if(shown[i] == '\n' || shown[i] == '\0')
+            const char ch = shown[i];
+            if(ch == 0x02) // set-font: flush the current run, then select the new font
             {
-                const char end = shown[i];
-                shown[i] = '\0';
-                text_gen->generate(text_x, y, &shown[start], text_sprites);
+                run[r] = '\0';
+                if(r > 0) x += render_text_run(font_idx, x, y, run);
+                r = 0;
+                const int param = shown[i + 1] ? (uint8_t)shown[i + 1] : 1;
+                font_idx = param - 1;
+                if(font_idx < 0 || font_idx >= gba_dialogue_font_count) font_idx = 0;
+                ++i; // skip the param byte
+            }
+            else if(ch == '\n' || ch == '\0')
+            {
+                run[r] = '\0';
+                if(r > 0) render_text_run(font_idx, x, y, run);
+                r = 0;
+                if(ch == '\0') break;
                 y += TEXT_LINE_H;
-                if(end == '\0') break;
-                start = i + 1;
+                x = text_x; // new line: reset x (the avatar shift is baked into text_x)
+            }
+            else
+            {
+                run[r++] = ch;
             }
         }
         text_rendered = text_revealed;
