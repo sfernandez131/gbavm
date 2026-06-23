@@ -31,6 +31,7 @@
 #include "bn_regular_bg_items_dialogue_panel.h" // committed asset: solid dialogue panel bg
 #include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
 #include "gba_avatar_assets.h" // generated: avatar index -> sprite (dialogue portraits)
+#include "gba_font_assets.h" // generated: the project's default dialogue font
 
 namespace
 {
@@ -116,9 +117,11 @@ namespace
     // Dialogue text layout (M4f): bottom-align the N-line block inside the box so the
     // box keeps a steady bottom margin regardless of line count (1 line -> y=52).
     constexpr int TEXT_X = -112;                 // left edge (screen x; box is full-width)
-    constexpr int TEXT_LINE_H = 16;              // line pitch (the 8x16 font is 16px tall)
+    constexpr int FONT_GLYPH_H = 8;              // the project font (M4n) is 8px tall
+    constexpr int TEXT_LINE_H = 16;              // line pitch (keeps the box tall enough for the avatar)
+    constexpr int TEXT_LINE_OFFSET = (TEXT_LINE_H - FONT_GLYPH_H) / 2; // centre the 8px glyph in its slot
     constexpr int TEXT_TOP_PAD = 4;              // px between the box top and the first line
-    constexpr int TEXT_BOTTOM_MARGIN = 12;       // px between the last line and the screen bottom
+    constexpr int TEXT_BOTTOM_MARGIN = 8;        // px between the last line and the screen bottom
     // Dialogue avatar portrait (M4m): a 16x16 sprite at the box's lower-left; the text
     // shifts right past it. Created per-dialogue from the op-0x90 avatar index.
     constexpr int AVATAR_X = -104;               // sprite centre (16px spans -112..-96)
@@ -408,7 +411,7 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
     // its PC until this returns 1), so the reveal state persists across calls.
     if(!text_gen)
     {
-        text_gen = bn::sprite_text_generator(common::variable_8x16_sprite_font);
+        text_gen = bn::sprite_text_generator(gba_dialogue_font); // the project's font (M4n)
         text_gen->set_left_alignment();
         text_gen->set_bg_priority(1); // in front of the overlay panel (priority 2)
     }
@@ -474,10 +477,10 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
             avatar_sprite.reset();
             text_x = TEXT_X;
         }
-        // Size the box to fit this text: our 16px font needs more height than GB
-        // Studio's 8px-row box math gives for 2+ lines, so override the box target
-        // here (the script's overlay slide still controls show/hide). 1 line keeps
-        // the same 32px box as before; each extra line adds TEXT_LINE_H.
+        // Size the box to fit this text: we use a TEXT_LINE_H pitch (taller than GB
+        // Studio's 8px rows) so the box stays tall enough for the avatar and gives the
+        // 8px font breathing room, so override the box target here (the script's overlay
+        // slide still controls show/hide). Each extra line adds TEXT_LINE_H.
         overlay_init();
         box_top_target = SCREEN_BOTTOM - (lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
     }
@@ -520,7 +523,7 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
         text_sprites.clear();
         // Render each '\n'-separated line on its own row, bottom-aligned so the box
         // keeps a steady bottom margin (the box itself is sized taller for more lines).
-        int y = SCREEN_BOTTOM - text_lines * TEXT_LINE_H - TEXT_BOTTOM_MARGIN;
+        int y = SCREEN_BOTTOM - text_lines * TEXT_LINE_H - TEXT_BOTTOM_MARGIN + TEXT_LINE_OFFSET;
         int start = 0;
         for(int i = 0;; ++i)
         {
