@@ -30,6 +30,7 @@
 #include "bn_sprite_items_dialogue_frame.h" // committed asset: 2px frame line (top border)
 #include "bn_regular_bg_items_dialogue_panel.h" // committed asset: solid dialogue panel bg
 #include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
+#include "gba_avatar_assets.h" // generated: avatar index -> sprite (dialogue portraits)
 
 namespace
 {
@@ -118,6 +119,13 @@ namespace
     constexpr int TEXT_LINE_H = 16;              // line pitch (the 8x16 font is 16px tall)
     constexpr int TEXT_TOP_PAD = 4;              // px between the box top and the first line
     constexpr int TEXT_BOTTOM_MARGIN = 12;       // px between the last line and the screen bottom
+    // Dialogue avatar portrait (M4m): a 16x16 sprite at the box's lower-left; the text
+    // shifts right past it. Created per-dialogue from the op-0x90 avatar index.
+    constexpr int AVATAR_X = -104;               // sprite centre (16px spans -112..-96)
+    constexpr int AVATAR_Y = 60;                 // centre (spans 52..68, aligned with line 1)
+    constexpr int AVATAR_TEXT_SHIFT = 24;        // px the text moves right to clear the avatar
+    bn::optional<bn::sprite_ptr> avatar_sprite;  // current dialogue portrait (if any)
+    int text_x = TEXT_X;                         // line x; shifted right when an avatar shows
 
     // --- dialogue overlay window box (M4d) ---
     // A solid bg panel clipped by an internal rect window to a bottom strip, drawn
@@ -392,7 +400,7 @@ int hw_fade_step(uint8_t flags)
     return done;
 }
 
-int hw_text_step(const char* text, const int16_t* values, int n_values)
+int hw_text_step(const char* text, const int16_t* values, int n_values, int avatar)
 {
     // Reveal the dialogue line char-by-char via Butano's text generator (typewriter),
     // then hold until A. The line is clamped to what fits in the sprite vector so
@@ -452,6 +460,20 @@ int hw_text_step(const char* text, const int16_t* values, int n_values)
         text_sprites.clear();
         text_showing = true;
         consume_text_codes();            // apply any leading speed code before char 1
+        // Avatar portrait (M4m): draw the sprite at the box's lower-left and shift the
+        // text right to clear it; no avatar (0xFF) keeps the text at its normal x.
+        const bn::sprite_item* av = (avatar != 0xff) ? gba_avatar_sprite(avatar) : nullptr;
+        if(av)
+        {
+            avatar_sprite = av->create_sprite(AVATAR_X, AVATAR_Y);
+            avatar_sprite->set_bg_priority(1); // in front of the panel, like the text
+            text_x = TEXT_X + AVATAR_TEXT_SHIFT;
+        }
+        else
+        {
+            avatar_sprite.reset();
+            text_x = TEXT_X;
+        }
         // Size the box to fit this text: our 16px font needs more height than GB
         // Studio's 8px-row box math gives for 2+ lines, so override the box target
         // here (the script's overlay slide still controls show/hide). 1 line keeps
@@ -478,6 +500,7 @@ int hw_text_step(const char* text, const int16_t* values, int n_values)
     {
         // Fully revealed and A pressed: dismiss.
         text_sprites.clear();
+        avatar_sprite.reset();
         text_showing = false;
         return 1;
     }
@@ -505,7 +528,7 @@ int hw_text_step(const char* text, const int16_t* values, int n_values)
             {
                 const char end = shown[i];
                 shown[i] = '\0';
-                text_gen->generate(TEXT_X, y, &shown[start], text_sprites);
+                text_gen->generate(text_x, y, &shown[start], text_sprites);
                 y += TEXT_LINE_H;
                 if(end == '\0') break;
                 start = i + 1;

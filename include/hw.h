@@ -68,7 +68,8 @@ int hw_fade_step(uint8_t flags);
 // generator) and wait for A. Returns 1 once dismissed. `text` follows the opcode
 // inline (null-terminated) in the bytecode. `values`/`n_values` are the variable
 // values substituted for the text's %d placeholders (M4i); pass NULL/0 for plain text.
-int hw_text_step(const char* text, const int16_t* values, int n_values);
+// `avatar` is the dialogue avatar index to draw beside the text, or 0xFF for none (M4m).
+int hw_text_step(const char* text, const int16_t* values, int n_values, int avatar);
 // --- dialogue overlay window box (M4d) ---
 // A Butano panel drawn behind the dialogue text. The box spans the screen width and
 // sits at the bottom; its height is derived from the GBVM overlay Y (rows from the
