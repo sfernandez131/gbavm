@@ -383,6 +383,16 @@ void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_ti
     coll_h = height_tiles;
 }
 
+// M6b: 1 if the player (actor 0) currently stands within the given tile rect (used to
+// fire trigger zones). The player's centre tile = position subpixels / SUBPX / 8.
+int hw_player_in_rect(int tx, int ty, int w, int h)
+{
+    const Actor& p = actors[0];
+    if(!p.active) return 0;
+    const int px = (int)p.x / SUBPX / 8, py = (int)p.y / SUBPX / 8;
+    return (px >= tx && px < tx + w && py >= ty && py < ty + h) ? 1 : 0;
+}
+
 void hw_player_update(void)
 {
     // Built-in top-down control: move the player (actor 0) from the live d-pad.

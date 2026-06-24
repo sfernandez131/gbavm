@@ -31,6 +31,8 @@ void hw_set_player_move(uint8_t enabled);
 // Set the loaded scene's collision grid (one byte/tile, row-major). Movement is
 // blocked into any tile whose low nibble is non-zero, and outside the grid bounds.
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);
+// 1 if the player (actor 0) is within the given tile rect (M6b trigger zones).
+int hw_player_in_rect(int tx, int ty, int w, int h);
 // Move the player (actor 0) from the live d-pad each frame when player movement is
 // enabled. Called from the main loop before hw_render.
 void hw_player_update(void);
