@@ -24,6 +24,7 @@
 #include "bn_vector.h"
 #include "bn_window.h"
 #include "bn_rect_window.h"
+#include "bn_dmg_music.h" // DMG (Game Boy) channel music playback (M5a)
 #include "common_variable_8x16_sprite_font.h"
 
 #include "bn_sprite_items_hero.h"
@@ -32,6 +33,7 @@
 #include "gba_scene_assets.h" // generated: scene -> background + actor sprite table
 #include "gba_avatar_assets.h" // generated: avatar index -> sprite (dialogue portraits)
 #include "gba_font_assets.h" // generated: the project's default dialogue font
+#include "gba_music_assets.h" // generated: DMG music track index -> dmg_music_item (M5a)
 
 namespace
 {
@@ -445,6 +447,18 @@ int hw_overlay_wait(int condition)
         ok = ok && (bn::keypad::a_pressed() || bn::keypad::b_pressed() ||
                     bn::keypad::start_pressed() || bn::keypad::select_pressed());
     return ok ? 1 : 0;
+}
+
+// --- DMG music (M5a): VM_MUSIC_PLAY / VM_MUSIC_STOP via Butano's DMG audio backend ---
+void hw_music_play(int track, int loop)
+{
+    const bn::dmg_music_item* item = gba_music_track(track);
+    if(item) item->play(1, loop != 0); // speed 1 (the VGM/DMG default), loop per the op
+}
+
+void hw_music_stop(void)
+{
+    if(bn::dmg_music::playing()) bn::dmg_music::stop();
 }
 
 void hw_overlay_update(void)
