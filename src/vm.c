@@ -499,6 +499,8 @@ static const UBYTE vm_args_len[256] = {
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
     [0x57]=1, [0x5D]=1,
+    // DMG music (M5a): MUSIC_PLAY track,loop; MUSIC_STOP
+    [0x60]=2, [0x61]=0,
     // dialogue text (M4): VM_DISPLAY_TEXT/_EX carry their text inline (variable length)
     [0x90]=0, [0x95]=0,
     // dialogue overlay window box (M4d): MOVE_TO x,y,speed; SHOW x,y,color,options; HIDE
@@ -591,6 +593,9 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // (rewind past opcode + its 1-byte flags operand, then yield).
         case 0x57: if (!hw_fade_step(A_U8(0))) { THIS->PC -= (INSTRUCTION_SIZE + 1); THIS->waitable = TRUE; } break;
         case 0x5D: /* VM_SET_SPRITE_MODE: Butano sets sprite size per-sprite; nothing global */ break;
+        // DMG music (M5a): play the resolved track (loop per the op) / stop the music.
+        case 0x60: hw_music_play(A_U8(0), A_U8(1)); break;
+        case 0x61: hw_music_stop(); break;
         // VM_DISPLAY_TEXT (0x90) / VM_DISPLAY_TEXT_EX (0x95): reveal the inline dialogue
         // text; block (rewind) until fully revealed, then advance. The A-wait is now a
         // separate VM_OVERLAY_WAIT (M4q). 0x95 has a leading display-flag byte (bit 0 =
