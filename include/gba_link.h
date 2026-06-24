@@ -50,6 +50,13 @@ typedef struct GbaActorInit {
     unsigned short y;
 } GbaActorInit;
 
+// A trigger zone (M6b): when the player enters its tile rect, its script runs once.
+typedef struct GbaTrigger {
+    unsigned char x, y;        // top-left of the zone, in tiles
+    unsigned char w, h;        // size in tiles
+    unsigned char * script;    // run on enter (a collected scene proc)
+} GbaTrigger;
+
 typedef struct GbaScene {
     unsigned char * init;
     unsigned char * const * actor_updates;
@@ -61,6 +68,8 @@ typedef struct GbaScene {
     unsigned int actors_init_count;
     unsigned char player_move; // 1 = built-in top-down d-pad movement for actor 0
     const unsigned char * collisions; // one byte per tile (row-major, width_px/8 wide); 0 = open
+    const GbaTrigger * triggers; // trigger zones (M6b)
+    unsigned int triggers_count;
 } GbaScene;
 
 // The project's scenes + which one to load at boot (both emitted by GBA Studio).
@@ -74,6 +83,9 @@ void gba_link_apply(void);
 // Load scene `idx`: reset the script runner, run its init, then start each actor
 // update as a persistent per-frame thread (activating that actor).
 void gba_load_scene(unsigned int idx);
+
+// Fire the trigger zone the player just entered (M6b); called each frame.
+void gba_check_triggers(void);
 
 // SRAM save/load (M6a). Save/load the global variables (+ scene) to battery SRAM;
 // the main loop calls these on EXCEPTION_SAVE / EXCEPTION_LOAD. gba_load_game returns
