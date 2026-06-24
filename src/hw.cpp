@@ -34,6 +34,7 @@
 #include "gba_avatar_assets.h" // generated: avatar index -> sprite (dialogue portraits)
 #include "gba_font_assets.h" // generated: the project's default dialogue font
 #include "gba_music_assets.h" // generated: DMG music track index -> dmg_music_item (M5a)
+#include "gba_sfx_assets.h" // generated: sound index -> sound_item (M5b)
 
 namespace
 {
@@ -459,6 +460,14 @@ void hw_music_play(int track, int loop)
 void hw_music_stop(void)
 {
     if(bn::dmg_music::playing()) bn::dmg_music::stop();
+}
+
+// VM_SFX_PLAY (M5b): play the resolved .wav sound on Butano's DirectSound mixer (Maxmod),
+// separate from the DMG music channels, so SFX and music coexist.
+void hw_sfx_play(int sfx)
+{
+    const bn::sound_item* s = gba_sfx(sfx);
+    if(s) s->play();
 }
 
 void hw_overlay_update(void)

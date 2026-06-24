@@ -84,9 +84,10 @@ void hw_overlay_move_to(int x, int y, int speed); // 0x91  speed: -1 in, -2 out,
 void hw_overlay_show(int x, int y, int color);    // 0x92  show the box at row y (instant)
 void hw_overlay_hide(void);                        // 0x93  hide the box (instant)
 
-// --- DMG music (M5a) ---
+// --- DMG music (M5a) + sound effects (M5b) ---
 void hw_music_play(int track, int loop);           // 0x60  play DMG track (loop != 0 = loop)
 void hw_music_stop(void);                          // 0x61  stop DMG music
+void hw_sfx_play(int sfx);                          // 0x66  play a .wav sound effect
 
 #ifdef __cplusplus
 }
