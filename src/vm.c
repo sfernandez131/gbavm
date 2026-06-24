@@ -500,7 +500,8 @@ static const UBYTE vm_args_len[256] = {
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
     [0x57]=1, [0x5D]=1,
     // DMG music (M5a): MUSIC_PLAY track,loop; MUSIC_STOP. SFX_PLAY sfx (M5b)
-    [0x60]=2, [0x61]=0, [0x66]=1,
+    // M5c: SOUND_MASTERVOL vol
+    [0x60]=2, [0x61]=0, [0x66]=1, [0x63]=1,
     // dialogue text (M4): VM_DISPLAY_TEXT/_EX carry their text inline (variable length)
     [0x90]=0, [0x95]=0,
     // dialogue overlay window box (M4d): MOVE_TO x,y,speed; SHOW x,y,color,options; HIDE
@@ -597,6 +598,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x60: hw_music_play(A_U8(0), A_U8(1)); break;
         case 0x61: hw_music_stop(); break;
         case 0x66: hw_sfx_play(A_U8(0)); break; // SFX_PLAY (M5b)
+        case 0x63: hw_sound_mastervol(A_U8(0)); break; // SOUND_MASTERVOL (M5c)
         // VM_DISPLAY_TEXT (0x90) / VM_DISPLAY_TEXT_EX (0x95): reveal the inline dialogue
         // text; block (rewind) until fully revealed, then advance. The A-wait is now a
         // separate VM_OVERLAY_WAIT (M4q). 0x95 has a leading display-flag byte (bit 0 =
