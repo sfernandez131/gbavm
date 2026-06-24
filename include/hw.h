@@ -88,6 +88,7 @@ void hw_overlay_hide(void);                        // 0x93  hide the box (instan
 void hw_music_play(int track, int loop);           // 0x60  play DMG track (loop != 0 = loop)
 void hw_music_stop(void);                          // 0x61  stop DMG music
 void hw_sfx_play(int sfx);                          // 0x66  play a .wav sound effect
+void hw_sound_mastervol(int vol);                  // 0x63  set the master volume (0..8)
 
 #ifdef __cplusplus
 }

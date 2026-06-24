@@ -25,6 +25,7 @@
 #include "bn_window.h"
 #include "bn_rect_window.h"
 #include "bn_dmg_music.h" // DMG (Game Boy) channel music playback (M5a)
+#include "bn_sound.h" // DirectSound master volume (M5c)
 #include "common_variable_8x16_sprite_font.h"
 
 #include "bn_sprite_items_hero.h"
@@ -290,6 +291,9 @@ namespace
 void hw_init(void)
 {
     bn::bg_palettes::set_transparent_color(bn::color(2, 4, 12));
+    // Butano's DMG master volume defaults to 25% (QUARTER), which is quite quiet;
+    // raise it so project music plays at a reasonable level (M5c).
+    bn::dmg_music::set_master_volume(bn::dmg_music_master_volume::HALF);
 }
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
@@ -468,6 +472,16 @@ void hw_sfx_play(int sfx)
 {
     const bn::sound_item* s = gba_sfx(sfx);
     if(s) s->play();
+}
+
+// VM_SOUND_MASTERVOL (M5c): GB Studio's master volume. The GB scale tops out at ~8
+// (a packed NR50 reads higher, so clamp); apply it to both the DMG music (fine volume,
+// over the coarse master set in hw_init) and the DirectSound SFX mixer.
+void hw_sound_mastervol(int vol)
+{
+    const bn::fixed v = bn::min(bn::fixed(vol) / 8, bn::fixed(1));
+    bn::dmg_music::set_volume(v);
+    bn::sound::set_master_volume(v);
 }
 
 void hw_overlay_update(void)
