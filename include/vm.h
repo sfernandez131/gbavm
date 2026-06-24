@@ -142,8 +142,10 @@ extern UWORD sys_time;
 #define RUNNER_BUSY      2
 #define RUNNER_EXCEPTION 3
 
-// VM_RAISE exception codes acted on by the main loop (see vm_exceptions).
+// VM_RAISE exception codes acted on by the main loop (see vm_exceptions / vm.i).
 #define EXCEPTION_CHANGE_SCENE 2
+#define EXCEPTION_SAVE         3
+#define EXCEPTION_LOAD         4
 
 // seed the VM PRNG at boot (GBA has no DIV register; pass a hardware-timer value)
 void vm_boot_seed(UWORD seed);

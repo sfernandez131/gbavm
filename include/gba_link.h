@@ -75,6 +75,12 @@ void gba_link_apply(void);
 // update as a persistent per-frame thread (activating that actor).
 void gba_load_scene(unsigned int idx);
 
+// SRAM save/load (M6a). Save/load the global variables (+ scene) to battery SRAM;
+// the main loop calls these on EXCEPTION_SAVE / EXCEPTION_LOAD. gba_load_game returns
+// 1 if a valid save was loaded, else 0.
+void gba_save_game(void);
+int gba_load_game(void);
+
 #ifdef __cplusplus
 }
 #endif

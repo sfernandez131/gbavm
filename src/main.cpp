@@ -35,12 +35,18 @@ int main()
 
     while(true)
     {
-        // A "Switch Scene" raises EXCEPTION_CHANGE_SCENE with the target scene index
-        // (gba_load_scene resets the runner + actors and starts the new scene).
-        if(script_runner_update() == RUNNER_EXCEPTION &&
-           vm_get_exception() == EXCEPTION_CHANGE_SCENE)
+        // A script raises an exception for scene changes (EXCEPTION_CHANGE_SCENE -> load
+        // the target scene) or SRAM save/load (M6a: EXCEPTION_SAVE/LOAD persist + restore
+        // the variables; the script then continues).
+        if(script_runner_update() == RUNNER_EXCEPTION)
         {
-            gba_load_scene(vm_get_exception_param());
+            switch(vm_get_exception())
+            {
+                case EXCEPTION_CHANGE_SCENE: gba_load_scene(vm_get_exception_param()); break;
+                case EXCEPTION_SAVE: gba_save_game(); break;
+                case EXCEPTION_LOAD: gba_load_game(); break;
+                default: break;
+            }
         }
         hw_player_update();     // d-pad -> player (actor 0) movement, when enabled
         hw_overlay_update();    // animate the dialogue overlay window box (slide in/out)

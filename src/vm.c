@@ -46,6 +46,8 @@ static UWORD vm_exception_param; // payload of the pending exception (e.g. scene
 extern void gba_scene_push(void);
 extern UWORD gba_scene_pop(void);
 extern UWORD gba_scene_pop_all(void);
+extern int gba_save_peek(int slot);   // M6a: 1 if a valid SRAM save exists
+extern void gba_save_clear(int slot); // M6a: invalidate the SRAM save
 
 UBYTE vm_last_unimplemented_op = 0;
 UWORD sys_time = 0;
@@ -502,6 +504,8 @@ static const UBYTE vm_args_len[256] = {
     // DMG music (M5a): MUSIC_PLAY track,loop; MUSIC_STOP. SFX_PLAY sfx (M5b)
     // M5c: SOUND_MASTERVOL vol
     [0x60]=2, [0x61]=0, [0x66]=1, [0x63]=1,
+    // SRAM save (M6a): SAVE_PEEK res,dest,sour,count,slot (9b); SAVE_CLEAR slot
+    [0x2E]=9, [0x2F]=1,
     // dialogue text (M4): VM_DISPLAY_TEXT/_EX carry their text inline (variable length)
     [0x90]=0, [0x95]=0,
     // dialogue overlay window box (M4d): MOVE_TO x,y,speed; SHOW x,y,color,options; HIDE
@@ -636,6 +640,11 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x94: if (!hw_overlay_wait(A_U8(1))) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; } break;
         // Scene stack: push saves the current scene; pop/pop_all signal a scene
         // change (like VM_RAISE CHANGE_SCENE) to the popped scene.
+        // SRAM save (M6a): SAVE_PEEK sets res = (a valid save exists); the COUNT>0
+        // read-saved-vars form is a follow-up. SAVE_CLEAR invalidates the save. (Save/
+        // load themselves go via VM_RAISE EXCEPTION_SAVE/LOAD -> the main loop.)
+        case 0x2E: { UWORD *res = (UWORD *)vm_resolve_ref(THIS, A_I16(0)); *res = (UWORD)gba_save_peek(A_U8(8)); break; }
+        case 0x2F: gba_save_clear(A_U8(0)); break;
         case 0x68: gba_scene_push(); break;
         case 0x69: vm_exception_code = EXCEPTION_CHANGE_SCENE; vm_exception_param = gba_scene_pop(); break;
         case 0x6A: vm_exception_code = EXCEPTION_CHANGE_SCENE; vm_exception_param = gba_scene_pop_all(); break;
