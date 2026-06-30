@@ -37,6 +37,16 @@ namespace
 void gba_load_scene(unsigned int idx)
 {
     if(idx >= gba_scenes_count) return;
+
+    // M6d: a Switch Scene event positions + faces the player (actor 0) for the destination
+    // just before raising CHANGE_SCENE; keep that entry point across the load instead of
+    // snapping back to the scene's authored start. On the initial boot load actor 0 isn't
+    // active yet, so the authored start (the project start position) is used.
+    unsigned short keep[3] = { 0, 0, 0 }; // [0]=id(in), [1]=x, [2]=y
+    const int keep_player = hw_actor_active(0);
+    unsigned char keep_dir = 0;
+    if(keep_player) { hw_actor_get_pos(keep); keep_dir = hw_actor_dir(0); }
+
     current_scene = idx;
     current_trigger = -1; // re-arm trigger zones for the new scene (M6b)
     const GbaScene & s = gba_scenes[idx];
@@ -48,10 +58,12 @@ void gba_load_scene(unsigned int idx)
 
     // Place every actor at its authored position + facing before scripts run, so
     // actors appear where the editor put them even without a Set Position script.
+    // The player (actor 0) keeps the Switch Scene entry point when arriving from another scene.
     for(unsigned int i = 0; i < s.actors_init_count; ++i)
     {
         const GbaActorInit & ai = s.actors_init[i];
-        hw_actor_place(ai.index, ai.x, ai.y, ai.dir);
+        if(ai.index == 0 && keep_player) hw_actor_place(0, keep[1], keep[2], keep_dir);
+        else hw_actor_place(ai.index, ai.x, ai.y, ai.dir);
     }
 
     script_execute(0, s.init, nullptr, 0); // scene init: runs once (may reposition)

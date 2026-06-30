@@ -68,6 +68,8 @@ void hw_actor_set_dir(int16_t id, uint8_t dir);     // 0x34 explicit facing
 void hw_actor_set_moving(int16_t id);               // mark moving this frame (walk anim)
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back
+int hw_actor_active(int16_t id);                  // M6d: 1 if the actor is active
+uint8_t hw_actor_dir(int16_t id);                 // M6d: the actor's facing (0 down,1 right,2 up,3 left)
 void hw_actor_get_angle(uint16_t* params, int16_t* dest); // 0x86  dir -> BRADS angle
 void hw_input_get(uint16_t* dst, uint8_t joyid);  // 0x54  GB-style button bitmask
 // 0x57 VM_FADE: advance the screen fade one frame (flags bit 0x02 = fade in, else
