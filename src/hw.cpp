@@ -393,6 +393,31 @@ int hw_player_in_rect(int tx, int ty, int w, int h)
     return (px >= tx && px < tx + w && py >= ty && py < ty + h) ? 1 : 0;
 }
 
+// M6c: when the player presses A and faces an adjacent placed actor (no dialogue up),
+// return that actor's runtime index so its interact script can run; else -1. The "front"
+// tile is the player's tile stepped one unit in their facing direction. text_showing
+// gates it so A dismisses an open dialogue instead of re-triggering the same NPC.
+int hw_interact_actor(void)
+{
+    if(text_showing) return -1;
+    if(!bn::keypad::a_pressed()) return -1;
+    const Actor& p = actors[0];
+    if(!p.active) return -1;
+    int fx = (int)p.x / SUBPX / 8, fy = (int)p.y / SUBPX / 8;
+    switch(p.dir) { case 0: ++fy; break; case 1: ++fx; break; case 2: --fy; break; default: --fx; break; }
+    for(int i = 1; i < MAX_ACTORS; ++i)
+    {
+        const Actor& a = actors[i];
+        if(a.active && (int)a.x / SUBPX / 8 == fx && (int)a.y / SUBPX / 8 == fy) return i;
+    }
+    return -1;
+}
+
+// M6c: 1 while a dialogue box is on screen. The main loop samples this at the start of a
+// frame so the A press that dismisses a dialogue isn't also read as a fresh interaction
+// (script_runner_update clears text_showing mid-frame, before gba_check_interact runs).
+int hw_dialogue_active(void) { return text_showing ? 1 : 0; }
+
 void hw_player_update(void)
 {
     // Built-in top-down control: move the player (actor 0) from the live d-pad.
