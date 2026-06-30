@@ -48,6 +48,7 @@ typedef struct GbaActorInit {
     unsigned char dir;     // facing: 0 down, 1 right, 2 up, 3 left
     unsigned short x;      // initial position in subpixels (256 per 8px tile)
     unsigned short y;
+    unsigned char * interact; // M6c: script run when the player faces this actor + presses A (0 if none)
 } GbaActorInit;
 
 // A trigger zone (M6b): when the player enters its tile rect, its script runs once.
@@ -86,6 +87,10 @@ void gba_load_scene(unsigned int idx);
 
 // Fire the trigger zone the player just entered (M6b); called each frame.
 void gba_check_triggers(void);
+
+// Run the interact script of the placed actor the player faces + presses A on (M6c);
+// called each frame.
+void gba_check_interact(void);
 
 // SRAM save/load (M6a). Save/load the global variables (+ scene) to battery SRAM;
 // the main loop calls these on EXCEPTION_SAVE / EXCEPTION_LOAD. gba_load_game returns

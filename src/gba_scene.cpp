@@ -84,6 +84,25 @@ extern "C" void gba_check_triggers(void)
     }
 }
 
+// NPC interaction (M6c): each frame, if the player pressed A while facing an adjacent
+// placed actor (no dialogue up), run that actor's interact script as a new thread. hw
+// returns the runtime actor index; map it back to its GbaActorInit to find the script.
+extern "C" void gba_check_interact(void)
+{
+    const int actor = hw_interact_actor();
+    if(actor < 0) return;
+    const GbaScene & s = gba_scenes[current_scene];
+    for(unsigned int i = 0; i < s.actors_init_count; ++i)
+    {
+        const GbaActorInit & ai = s.actors_init[i];
+        if(ai.index == (unsigned char)actor && ai.interact)
+        {
+            script_execute(0, ai.interact, nullptr, 0);
+            return;
+        }
+    }
+}
+
 // Scene stack (VM_SCENE_PUSH/POP/POP_ALL). The VM calls these via extern "C";
 // pop/pop_all return the scene index to load (the VM signals a scene change and
 // the main loop calls gba_load_scene with the result).

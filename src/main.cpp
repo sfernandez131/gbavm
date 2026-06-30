@@ -35,6 +35,9 @@ int main()
 
     while(true)
     {
+        // Was a dialogue open before this frame's scripts ran? If so, the A that closes it
+        // (consumed by script_runner_update) must not also start an NPC interaction (M6c).
+        const int dialogue_was_open = hw_dialogue_active();
         // A script raises an exception for scene changes (EXCEPTION_CHANGE_SCENE -> load
         // the target scene) or SRAM save/load (M6a: EXCEPTION_SAVE/LOAD persist + restore
         // the variables; the script then continues).
@@ -50,6 +53,7 @@ int main()
         }
         hw_player_update();     // d-pad -> player (actor 0) movement, when enabled
         gba_check_triggers();   // fire a trigger zone's script when the player enters it (M6b)
+        if(!dialogue_was_open) gba_check_interact(); // A + facing a placed actor -> interact (M6c)
         hw_overlay_update();    // animate the dialogue overlay window box (slide in/out)
         hw_render();            // push actor state into sprites
         sys_time++;

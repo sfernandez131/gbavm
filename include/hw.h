@@ -33,6 +33,13 @@ void hw_set_player_move(uint8_t enabled);
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);
 // 1 if the player (actor 0) is within the given tile rect (M6b trigger zones).
 int hw_player_in_rect(int tx, int ty, int w, int h);
+// M6c: if the player just pressed A while facing an adjacent placed actor (and no
+// dialogue is up), return that actor's runtime index so its interact script can run;
+// otherwise -1.
+int hw_interact_actor(void);
+// M6c: 1 while a dialogue box is on screen (sampled at frame start by the main loop so a
+// dismiss A-press isn't also read as an interaction).
+int hw_dialogue_active(void);
 // Move the player (actor 0) from the live d-pad each frame when player movement is
 // enabled. Called from the main loop before hw_render.
 void hw_player_update(void);
