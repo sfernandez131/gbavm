@@ -795,6 +795,12 @@ void hw_actor_set_pos(uint16_t* pos)
     a.y = pos[2];
 }
 
+// M6d: read an actor's runtime state. gba_load_scene uses these to carry the player across
+// a scene change - a Switch Scene event positions/faces actor 0 just before the change, and
+// the load must keep that instead of snapping the player back to the new scene's start.
+int hw_actor_active(int16_t id) { return (id >= 0 && id < MAX_ACTORS && actors[id].active) ? 1 : 0; }
+uint8_t hw_actor_dir(int16_t id) { return (id >= 0 && id < MAX_ACTORS) ? actors[id].dir : 0; }
+
 void hw_actor_get_pos(uint16_t* pos)
 {
     int id = int16_t(pos[0]);
