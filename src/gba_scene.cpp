@@ -138,10 +138,14 @@ extern "C" unsigned short gba_scene_pop_all(void)
 }
 
 // --- SRAM save/load (M6a). EXCEPTION_SAVE/LOAD (via VM_RAISE) call the first two from
-// the main loop; VM_SAVE_PEEK/CLEAR call the rest from the VM. Single slot for now (the
-// GB Studio slot operand is ignored). ---
+// the main loop; VM_SAVE_PEEK/CLEAR call the rest from the VM. Multiple slots (M6g): each
+// save slot occupies its own GbaSave-sized region of SRAM at slot * sizeof(GbaSave); the
+// slot comes from the Save/Load event (the VM_RAISE payload, or the peek/clear operand). ---
 
-extern "C" void gba_save_game(void)
+// M6g: byte offset of a save slot's region in SRAM.
+static int gba_save_offset(int slot) { return slot * (int)sizeof(GbaSave); }
+
+extern "C" void gba_save_game(int slot)
 {
     GbaSave s;
     s.magic = SAVE_MAGIC;
@@ -152,13 +156,13 @@ extern "C" void gba_save_game(void)
     s.player_y = pos[2];
     s.player_dir = hw_actor_dir(0);
     for(int i = 0; i < VM_HEAP_SIZE; ++i) s.vars[i] = script_memory[i];
-    bn::sram::write(s);
+    bn::sram::write_offset(s, gba_save_offset(slot));
 }
 
-extern "C" int gba_load_game(void)
+extern "C" int gba_load_game(int slot)
 {
     GbaSave s;
-    bn::sram::read(s);
+    bn::sram::read_offset(s, gba_save_offset(slot));
     if(s.magic != SAVE_MAGIC) return 0;
     // Resume into the saved scene (M6e). gba_load_scene runs script_runner_init(TRUE), which
     // wipes script_memory, and queues the scene init as a thread that runs NEXT frame - so:
@@ -174,19 +178,17 @@ extern "C" int gba_load_game(void)
     return 1;
 }
 
-// VM_SAVE_PEEK existence check (slot ignored): true if a valid save exists. The COUNT>0
+// VM_SAVE_PEEK existence check: true if a valid save exists in `slot`. The COUNT>0
 // read-saved-vars form is a follow-up; the common "If Data Saved" use passes COUNT 0.
 extern "C" int gba_save_peek(int slot)
 {
-    (void)slot;
     unsigned int magic = 0;
-    bn::sram::read(magic); // magic is the first field of the slot at offset 0
+    bn::sram::read_offset(magic, gba_save_offset(slot)); // magic is the slot's first field
     return magic == SAVE_MAGIC ? 1 : 0;
 }
 
 extern "C" void gba_save_clear(int slot)
 {
-    (void)slot;
-    unsigned int magic = 0; // overwrite the magic to invalidate the save
-    bn::sram::write(magic);
+    unsigned int magic = 0; // overwrite the slot's magic to invalidate its save
+    bn::sram::write_offset(magic, gba_save_offset(slot));
 }

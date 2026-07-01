@@ -46,8 +46,8 @@ int main()
             switch(vm_get_exception())
             {
                 case EXCEPTION_CHANGE_SCENE: gba_load_scene(vm_get_exception_param()); break;
-                case EXCEPTION_SAVE: gba_save_game(); break;
-                case EXCEPTION_LOAD: gba_load_game(); break;
+                case EXCEPTION_SAVE: gba_save_game(vm_get_exception_param()); break;   // param = slot (M6g)
+                case EXCEPTION_LOAD: gba_load_game(vm_get_exception_param()); break;
                 default: break;
             }
         }
