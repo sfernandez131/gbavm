@@ -52,6 +52,14 @@ extern void gba_save_clear(int slot); // M6a: invalidate the SRAM save
 UBYTE vm_last_unimplemented_op = 0;
 UWORD sys_time = 0;
 
+// Timers (M6f): VM_TIMER_PREPARE stores a slot's script; VM_TIMER_SET arms it to fire that
+// script every `interval` ticks (1 tick = TIMER_CYCLES frames). timers_update() (main loop)
+// counts down + fires. Timers are per-scene - script_runner_init clears them on scene load.
+#define TIMER_CYCLES 16
+#define VM_MAX_TIMERS 8
+typedef struct { UBYTE bank; UBYTE * pc; UBYTE interval; UWORD countdown; UBYTE active; } VM_TIMER;
+static VM_TIMER vm_timers[VM_MAX_TIMERS];
+
 #define EXCEPTION_CODE_NONE 0
 
 // Resolve operand index to a typed pointer (negative = stack-relative, positive = global).
@@ -511,6 +519,8 @@ static const UBYTE vm_args_len[256] = {
     // dialogue overlay window box (M4d): MOVE_TO x,y,speed; SHOW x,y,color,options; HIDE
     // M4q: OVERLAY_WAIT modal,condition
     [0x91]=3, [0x92]=4, [0x93]=0, [0x94]=2,
+    // timers (M6f): PREPARE ctx,bank,addr(ptr); SET ctx,interval; STOP ctx; RESET ctx
+    [0x70]=6, [0x71]=2, [0x72]=1, [0x73]=1,
 };
 
 // little-endian fixed-argument readers
@@ -638,6 +648,12 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x92: hw_overlay_show(A_U8(0), A_U8(1), A_U8(2)); break;
         case 0x93: hw_overlay_hide(); break;
         case 0x94: if (!hw_overlay_wait(A_U8(1))) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; } break;
+        // Timers (M6f): PREPARE stores a slot's script; SET arms it to fire every `interval`
+        // ticks; STOP disables it; RESET restarts the countdown. timers_update() fires them.
+        case 0x70: { UBYTE c = A_U8(0); if (c < VM_MAX_TIMERS) { vm_timers[c].bank = A_U8(1); vm_timers[c].pc = A_PTR(2); } break; }
+        case 0x71: { UBYTE c = A_U8(0); if (c < VM_MAX_TIMERS) { UBYTE iv = A_U8(1); vm_timers[c].interval = iv; vm_timers[c].countdown = (UWORD)iv * TIMER_CYCLES; vm_timers[c].active = 1; } break; }
+        case 0x72: { UBYTE c = A_U8(0); if (c < VM_MAX_TIMERS) vm_timers[c].active = 0; break; }
+        case 0x73: { UBYTE c = A_U8(0); if (c < VM_MAX_TIMERS) vm_timers[c].countdown = (UWORD)vm_timers[c].interval * TIMER_CYCLES; break; }
         // Scene stack: push saves the current scene; pop/pop_all signal a scene
         // change (like VM_RAISE CHANGE_SCENE) to the popped scene.
         // SRAM save (M6a): SAVE_PEEK sets res = (a valid save exists); the COUNT>0
@@ -662,6 +678,7 @@ void script_runner_init(UBYTE reset) {
     if (reset) {
         memset(script_memory, 0, sizeof(script_memory));
         memset(CTXS, 0, sizeof(CTXS));
+        memset(vm_timers, 0, sizeof(vm_timers)); // M6f: timers are per-scene
     }
     UWORD * base_addr = &script_memory[VM_HEAP_SIZE];
     free_ctxs = CTXS; first_ctx = 0;
@@ -722,6 +739,20 @@ UBYTE script_terminate(UBYTE ID) {
         ctx = ctx->next;
     }
     return FALSE;
+}
+
+// M6f: advance every armed timer one frame; when a slot's countdown elapses, run its
+// prepared script as a new thread and restart the countdown (timers repeat).
+void timers_update(void) {
+    for (UBYTE c = 0; c < VM_MAX_TIMERS; c++) {
+        VM_TIMER * t = &vm_timers[c];
+        if (!t->active || t->interval == 0) continue;
+        if (t->countdown) t->countdown--;
+        if (t->countdown == 0) {
+            script_execute(t->bank, t->pc, 0, 0);
+            t->countdown = (UWORD)t->interval * TIMER_CYCLES;
+        }
+    }
 }
 
 UBYTE script_runner_update(void) {

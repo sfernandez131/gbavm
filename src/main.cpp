@@ -54,6 +54,7 @@ int main()
         hw_player_update();     // d-pad -> player (actor 0) movement, when enabled
         gba_check_triggers();   // fire a trigger zone's script when the player enters it (M6b)
         if(!dialogue_was_open) gba_check_interact(); // A + facing a placed actor -> interact (M6c)
+        timers_update();        // fire any timer scripts whose countdown elapsed (M6f)
         hw_overlay_update();    // animate the dialogue overlay window box (slide in/out)
         hw_render();            // push actor state into sprites
         sys_time++;

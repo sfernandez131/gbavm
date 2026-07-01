@@ -157,6 +157,8 @@ SCRIPT_CTX * script_execute(UBYTE bank, UBYTE * pc, UWORD * handle, UBYTE nargs,
 UBYTE script_terminate(UBYTE ID);
 // run one quant across all active contexts; returns a RUNNER_* code
 UBYTE script_runner_update(void);
+// M6f: advance armed timers one frame, firing any that elapse (called from the main loop).
+void timers_update(void);
 // Pending VM exception + its payload (read by the main loop after RUNNER_EXCEPTION).
 UBYTE vm_get_exception(void);
 UWORD vm_get_exception_param(void);
