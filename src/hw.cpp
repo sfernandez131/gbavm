@@ -246,6 +246,8 @@ namespace
     int current_scene = 0;                       // index for per-scene sprite lookup
     int scene_w_px = 240;                        // scene logical size (for camera bounds)
     int scene_h_px = 160;
+    int shake_frames = 0;                        // camera shake (M6h): frames of shake left
+    int shake_total = 0;                         // total shake length, for amplitude decay
 
     // GBVM actor subpixels -> Butano world pixels. The scene is centred on the world
     // origin (the bg content is centred on its padded map, which create_bg(0,0) puts
@@ -316,21 +318,40 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     }
 }
 
+// M6h: start a camera shake for `frames` frames; hw_render jitters the view (decaying
+// amplitude) until it elapses. Called by the _camera_shake_frames native.
+void hw_camera_shake(int frames)
+{
+    shake_frames = frames;
+    shake_total = frames;
+}
+
 void hw_render(void)
 {
     // Camera follows the lowest-index active actor (the player / first placed actor),
     // clamped so the view never leaves the scene.
     if(camera)
     {
+        bn::fixed cx = 0, cy = 0;
         for(int i = 0; i < MAX_ACTORS; ++i)
         {
             if(actors[i].active)
             {
-                camera->set_position(clamp_cam(to_world_x(actors[i].x), scene_w_px, HALF_W),
-                                     clamp_cam(to_world_y(actors[i].y), scene_h_px, HALF_H));
+                cx = clamp_cam(to_world_x(actors[i].x), scene_w_px, HALF_W);
+                cy = clamp_cam(to_world_y(actors[i].y), scene_h_px, HALF_H);
                 break;
             }
         }
+        // Camera shake (M6h): jitter the view horizontally for shake_frames frames with an
+        // amplitude that decays to 0, then settle back on the actor. Runs from hw_render so
+        // it shakes even while a script blocks on the Camera Shake wait.
+        if(shake_frames > 0)
+        {
+            const int amp = 10 * shake_frames / (shake_total ? shake_total : 1);
+            cx += (shake_frames & 1) ? amp : -amp;
+            --shake_frames;
+        }
+        camera->set_position(cx, cy);
     }
 
     for(int i = 0; i < MAX_ACTORS; ++i)
