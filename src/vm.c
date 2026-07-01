@@ -677,7 +677,11 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
 
 void script_runner_init(UBYTE reset) {
     if (reset) {
-        memset(script_memory, 0, sizeof(script_memory));
+        // Clear the per-context stacks (running-script state) but KEEP the global variables
+        // (script_memory[0..VM_HEAP_SIZE)) so globals persist across scene changes, matching
+        // GB Studio. The globals start at 0 from C static zero-init at boot.
+        memset(&script_memory[VM_HEAP_SIZE], 0,
+               (VM_MAX_CONTEXTS * VM_CONTEXT_STACK_SIZE) * sizeof(UWORD));
         memset(CTXS, 0, sizeof(CTXS));
         memset(vm_timers, 0, sizeof(vm_timers)); // M6f: timers are per-scene
     }
