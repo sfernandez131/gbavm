@@ -372,9 +372,10 @@ static void vm_memcpy(SCRIPT_CTX * THIS, INT16 idxA, INT16 idxB, INT16 count) {
 
 static void vm_raise(SCRIPT_CTX * THIS, UBYTE code, UBYTE size) {
     vm_exception_code = code;
-    // EXCEPTION_CHANGE_SCENE carries a 2-byte scene index (gbavm-specific, emitted
-    // by the editor's bridge); capture it before skipping the raise's inline data.
+    // Capture the raise's inline payload before skipping it: CHANGE_SCENE carries a 2-byte
+    // scene index; SAVE/LOAD carry a 1-byte save slot (M6g). (Both emitted by the bridge.)
     if (size >= 2) vm_exception_param = rd_u16(THIS->PC);
+    else if (size == 1) vm_exception_param = *(THIS->PC);
     THIS->PC += size;
 }
 

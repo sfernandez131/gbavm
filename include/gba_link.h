@@ -92,11 +92,12 @@ void gba_check_triggers(void);
 // called each frame.
 void gba_check_interact(void);
 
-// SRAM save/load (M6a). Save/load the global variables (+ scene) to battery SRAM;
-// the main loop calls these on EXCEPTION_SAVE / EXCEPTION_LOAD. gba_load_game returns
-// 1 if a valid save was loaded, else 0.
-void gba_save_game(void);
-int gba_load_game(void);
+// SRAM save/load (M6a; multi-slot M6g). Save/load the global variables + scene + player to
+// battery SRAM slot `slot` (each slot is its own GbaSave-sized region). The main loop calls
+// these on EXCEPTION_SAVE / EXCEPTION_LOAD, passing the slot from the raise. gba_load_game
+// returns 1 if a valid save was loaded, else 0.
+void gba_save_game(int slot);
+int gba_load_game(int slot);
 
 #ifdef __cplusplus
 }
