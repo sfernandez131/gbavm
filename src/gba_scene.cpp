@@ -29,7 +29,10 @@ namespace
     struct GbaSave
     {
         unsigned int magic;
-        unsigned short scene;
+        unsigned short scene;        // scene to resume into (M6e)
+        unsigned short player_x;     // player position + facing to resume at (M6e)
+        unsigned short player_y;
+        unsigned char player_dir;
         unsigned short vars[VM_HEAP_SIZE];
     };
 }
@@ -143,6 +146,11 @@ extern "C" void gba_save_game(void)
     GbaSave s;
     s.magic = SAVE_MAGIC;
     s.scene = (unsigned short)current_scene;
+    unsigned short pos[3] = { 0, 0, 0 }; // [0]=id in; hw writes [1]=x, [2]=y
+    hw_actor_get_pos(pos);
+    s.player_x = pos[1];
+    s.player_y = pos[2];
+    s.player_dir = hw_actor_dir(0);
     for(int i = 0; i < VM_HEAP_SIZE; ++i) s.vars[i] = script_memory[i];
     bn::sram::write(s);
 }
@@ -152,10 +160,17 @@ extern "C" int gba_load_game(void)
     GbaSave s;
     bn::sram::read(s);
     if(s.magic != SAVE_MAGIC) return 0;
-    // Restore the global variables in place; the script resumes after the Load event.
-    // The saved scene is NOT reloaded yet (that re-runs the scene init and can loop if
-    // the init itself loads) - full scene/VM-context resume is a follow-up.
+    // Resume into the saved scene (M6e). gba_load_scene runs script_runner_init(TRUE), which
+    // wipes script_memory, and queues the scene init as a thread that runs NEXT frame - so:
+    //   1. load the scene, then 2. restore the globals over the wiped memory, then 3. re-place
+    //   the player at the saved spot (overriding the scene's authored start).
+    // Caveat: a scene whose init writes these globals would clobber them when it runs next
+    // frame; scenes shouldn't set persistent variables in their init on a resume.
+    // Load Data with no save is a no-op (magic check above), so scene inits can call it
+    // unconditionally to auto-resume on boot.
+    gba_load_scene(s.scene);
     for(int i = 0; i < VM_HEAP_SIZE; ++i) script_memory[i] = s.vars[i];
+    hw_actor_place(0, s.player_x, s.player_y, s.player_dir);
     return 1;
 }
 
