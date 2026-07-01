@@ -293,9 +293,11 @@ namespace
 void hw_init(void)
 {
     bn::bg_palettes::set_transparent_color(bn::color(2, 4, 12));
-    // Butano's DMG master volume defaults to 25% (QUARTER), which is quite quiet;
-    // raise it so project music plays at a reasonable level (M5c).
-    bn::dmg_music::set_master_volume(bn::dmg_music_master_volume::HALF);
+    // Audio levels. Butano's DMG master volume defaults to 25% (QUARTER) - raise it to
+    // FULL so project music is clearly audible. Also set the DirectSound master volume so
+    // Maxmod sound effects (M5b) are at full level (its default is not guaranteed high).
+    bn::dmg_music::set_master_volume(bn::dmg_music_master_volume::FULL);
+    bn::sound::set_master_volume(1);
 }
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
