@@ -25,6 +25,7 @@
 #include "bn_window.h"
 #include "bn_rect_window.h"
 #include "bn_dmg_music.h" // DMG (Game Boy) channel music playback (M5a)
+#include "bn_music.h" // Maxmod (DirectSound) tracker music playback (GBA-native, alongside DMG)
 #include "bn_sound.h" // DirectSound master volume (M5c)
 #include "common_variable_8x16_sprite_font.h"
 
@@ -293,9 +294,16 @@ namespace
 void hw_init(void)
 {
     bn::bg_palettes::set_transparent_color(bn::color(2, 4, 12));
-    // Butano's DMG master volume defaults to 25% (QUARTER), which is quite quiet;
-    // raise it so project music plays at a reasonable level (M5c).
-    bn::dmg_music::set_master_volume(bn::dmg_music_master_volume::HALF);
+    // Audio levels. Butano's DMG master volume defaults to 25% (QUARTER) - raise it to
+    // FULL so project music is clearly audible. Also set the DirectSound master volume so
+    // Maxmod sound effects (M5b) are at full level (its default is not guaranteed high).
+    bn::dmg_music::set_master_volume(bn::dmg_music_master_volume::FULL);
+    bn::sound::set_master_volume(1);
+    // GBA master sound enable (REG_SOUNDCNT_X, 0x04000084, bit 7). Butano's audio init leaves
+    // this OFF in this build, and while it is off the sound hardware ignores every write to the
+    // channel registers - so gbt-player's notes and Maxmod's DirectSound never take effect and
+    // nothing is audible (verified via mGBA's I/O viewer: SOUNDCNT_X read 0x0000). Turn it on.
+    *reinterpret_cast<volatile uint16_t*>(0x04000084) |= 0x0080;
 }
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
@@ -513,13 +521,25 @@ int hw_overlay_wait(int condition)
 // --- DMG music (M5a): VM_MUSIC_PLAY / VM_MUSIC_STOP via Butano's DMG audio backend ---
 void hw_music_play(int track, int loop)
 {
-    const bn::dmg_music_item* item = gba_music_track(track);
-    if(item) item->play(1, loop != 0); // speed 1 (the VGM/DMG default), loop per the op
+    if(gba_music_backend(track) == 1) // Maxmod (DirectSound) tracker music - GBA-native
+    {
+        const bn::music_item* item = gba_maxmod_music_track(track);
+        if(item) item->play(bn::fixed(1), loop != 0);
+    }
+    else // DMG (gbt-player) chiptune - the 4 Game Boy PSG channels
+    {
+        const bn::dmg_music_item* item = gba_dmg_music_track(track);
+        // Speed 6 is gbt-player's default for MOD songs (GB Studio music is MOD-based).
+        // Butano's play() would force speed 1, which is 6x too fast for a MOD that doesn't
+        // self-specify its tempo; the song's own baked-in speed effects still override this.
+        if(item) item->play(6, loop != 0);
+    }
 }
 
 void hw_music_stop(void)
 {
-    if(bn::dmg_music::playing()) bn::dmg_music::stop();
+    if(bn::music::playing()) bn::music::stop();          // Maxmod (DirectSound) track
+    if(bn::dmg_music::playing()) bn::dmg_music::stop();   // DMG (gbt-player) track
 }
 
 // VM_SFX_PLAY (M5b): play the resolved .wav sound on Butano's DirectSound mixer (Maxmod),
@@ -536,8 +556,9 @@ void hw_sfx_play(int sfx)
 void hw_sound_mastervol(int vol)
 {
     const bn::fixed v = bn::min(bn::fixed(vol) / 8, bn::fixed(1));
-    bn::dmg_music::set_volume(v);
-    bn::sound::set_master_volume(v);
+    bn::dmg_music::set_volume(v);   // DMG (gbt-player) music
+    bn::music::set_volume(v);       // Maxmod (DirectSound) music
+    bn::sound::set_master_volume(v); // DirectSound SFX mixer
 }
 
 void hw_overlay_update(void)
