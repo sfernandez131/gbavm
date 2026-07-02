@@ -521,10 +521,18 @@ int hw_overlay_wait(int condition)
 // --- DMG music (M5a): VM_MUSIC_PLAY / VM_MUSIC_STOP via Butano's DMG audio backend ---
 void hw_music_play(int track, int loop)
 {
+    // GB Studio music ALWAYS loops until stopped: its compiler never sets the VM
+    // loop operand (eventMusicPlay -> musicPlay(musicId) with loop defaulting to
+    // false -> .MUSIC_NO_LOOP in every script), because the GB-side drivers
+    // (hUGEDriver/gbt) loop unconditionally and ignore it. Honoring the operand
+    // here made every song play once and stop ~30s in (found 2026-07-02 while
+    // chasing a phantom Wonderful-Toolchain audio bug). Ignore it like GB does.
+    (void)loop;
+
     if(gba_music_backend(track) == 1) // Maxmod (DirectSound) tracker music - GBA-native
     {
         const bn::music_item* item = gba_maxmod_music_track(track);
-        if(item) item->play(bn::fixed(1), loop != 0);
+        if(item) item->play(bn::fixed(1), true);
     }
     else // DMG (gbt-player) chiptune - the 4 Game Boy PSG channels
     {
@@ -532,7 +540,7 @@ void hw_music_play(int track, int loop)
         // Speed 6 is gbt-player's default for MOD songs (GB Studio music is MOD-based).
         // Butano's play() would force speed 1, which is 6x too fast for a MOD that doesn't
         // self-specify its tempo; the song's own baked-in speed effects still override this.
-        if(item) item->play(6, loop != 0);
+        if(item) item->play(6, true);
     }
 }
 
