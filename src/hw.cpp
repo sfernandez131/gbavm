@@ -531,11 +531,18 @@ void hw_music_play(int track, int loop)
 
     if(gba_music_backend(track) == 1) // Maxmod (DirectSound) tracker music - GBA-native
     {
+        // Playing a song replaces whatever is playing (GB semantics: one music
+        // track at a time). play() below replaces same-backend music, but a
+        // track on the OTHER backend would keep playing underneath - stop it.
+        if(bn::dmg_music::playing()) bn::dmg_music::stop();
+
         const bn::music_item* item = gba_maxmod_music_track(track);
         if(item) item->play(bn::fixed(1), true);
     }
     else // DMG (gbt-player) chiptune - the 4 Game Boy PSG channels
     {
+        if(bn::music::playing()) bn::music::stop();
+
         const bn::dmg_music_item* item = gba_dmg_music_track(track);
         // Speed 6 is gbt-player's default for MOD songs (GB Studio music is MOD-based).
         // Butano's play() would force speed 1, which is 6x too fast for a MOD that doesn't
