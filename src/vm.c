@@ -506,6 +506,8 @@ static const UBYTE vm_args_len[256] = {
     // actor movement (M3b): MOVE_TO_INIT/X/Y/XY + attr, SET_DIR + dir, SET_DIR_X/Y,
     // SET_ANIM_MOVING, MOVE_CANCEL (all take an i16 actor-ref; the move/dir ops add u8)
     [0x32]=3, [0x34]=3, [0x36]=3, [0x37]=3, [0x38]=3, [0x39]=2, [0x3B]=2, [0x3C]=2, [0x3D]=2,
+    // actor properties (M10a): SET_MOVE_SPEED ref,speed; SET_HIDDEN ref,hidden; GET_DIR ref,dest
+    [0x3E]=3, [0x3F]=3, [0x40]=4,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
@@ -599,6 +601,10 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x3B: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_set_dir((INT16)r[0], 1); break; }
         case 0x3C: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_moving((INT16)r[0]); break; }
         case 0x3D: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_cancel((INT16)r[0]); break; }
+        // actor properties (M10a)
+        case 0x3E: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_move_speed((INT16)r[0], A_U8(2)); break; }
+        case 0x3F: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_hidden((INT16)r[0], A_U8(2)); break; }
+        case 0x40: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); *(UWORD *)vm_resolve_ref(THIS, A_I16(2)) = hw_actor_dir((INT16)r[0]); break; }
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
         // trig + actor-angle opcodes (P0)
