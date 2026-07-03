@@ -58,6 +58,8 @@ namespace
         uint8_t dir = 0;                 // facing: 0 down, 1 right, 2 up, 3 left
         uint8_t move_speed = MOVE_SPEED; // subpixels/frame (32 = 1px/frame); per-actor (M10a)
         uint8_t anim_state = 0;          // animation state row (M10c); 0 = default
+        bool anim_noloop = false;        // M10e: clamp on the last frame instead of looping
+        bool coll_enabled = true;        // M10e: false = doesn't block other actors
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
         uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
         bn::optional<bn::sprite_ptr> sprite;   // created lazily on first render
@@ -395,7 +397,9 @@ void hw_render(void)
                 const int st = (a.anim_state < GBA_ANIM_STATES) ? a.anim_state : 0;
                 const int anim = st * 8 + (a.dir & 3) + (a.moving ? 4 : 0);
                 const int len = def->anim_len[anim] ? def->anim_len[anim] : 1;
-                const int frame = def->anim_start[anim] + ((a.anim_timer >> 3) % len);
+                const int tick = a.anim_timer >> 3;
+                const int frame = def->anim_start[anim] +
+                    (a.anim_noloop ? ((tick < len) ? tick : len - 1) : (tick % len));
                 a.sprite->set_tiles(item->tiles_item(), frame);
             }
             a.sprite->set_position(to_world_x(a.x), to_world_y(a.y));
@@ -795,6 +799,8 @@ void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
     a.dir = dir & 3;
     a.moving = false; // a placement is not movement; don't trigger the walk frames
     a.anim_state = 0; // scene placement resets to the default animation state (M10c)
+    a.anim_noloop = false;
+    a.coll_enabled = true;
 }
 
 // Move one axis toward the destination by the actor's speed, snapping when within
@@ -857,6 +863,30 @@ void hw_actor_emote(int16_t id, uint8_t emote)
     emote_sprite->set_bg_priority(2); // in front of the scene bg (3)
     emote_timer = EMOTE_FRAMES;
     emote_actor = id;
+}
+
+// M10e: apply GB Studio actor flags (VM_ACTOR_SET_FLAGS). `mask` selects which
+// bits change; `flags` gives their new values. Supported: HIDDEN (0x02),
+// ANIM_NOLOOP (0x04), COLLISION (0x08). PINNED/PERSISTENT are ignored (no
+// pinned rendering; persistence is engine-global).
+void hw_actor_set_flags(int16_t id, uint8_t flags, uint8_t mask)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    if(mask & 0x02) a.visible = !(flags & 0x02);
+    if(mask & 0x04)
+    {
+        const bool noloop = (flags & 0x04) != 0;
+        if(a.anim_noloop != noloop) { a.anim_noloop = noloop; a.anim_timer = 0; }
+    }
+    if(mask & 0x08) a.coll_enabled = (flags & 0x08) != 0;
+}
+
+// M10e: enable/disable the actor as a collision blocker (VM_ACTOR_SET_COLL_ENABLED).
+void hw_actor_set_coll_enabled(int16_t id, uint8_t enabled)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].coll_enabled = (enabled != 0);
 }
 
 // M10c: switch the actor's animation state (VM_ACTOR_SET_ANIM_SET). The operand

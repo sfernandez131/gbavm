@@ -69,6 +69,8 @@ void hw_actor_set_move_speed(int16_t id, uint8_t speed); // 0x3E subpx/frame, 32
 void hw_actor_set_hidden(int16_t id, uint8_t hidden);    // 0x3F hide/show the sprite (M10a)
 void hw_actor_set_anim_state(int16_t id, uint8_t state); // 0x41 animation state row (M10c)
 void hw_actor_emote(int16_t id, uint8_t emote);          // 0x42 emote bubble ~1s (M10d)
+void hw_actor_set_flags(int16_t id, uint8_t flags, uint8_t mask); // 0x44 GB actor flags (M10e)
+void hw_actor_set_coll_enabled(int16_t id, uint8_t enabled);      // 0x45 collision blocker on/off (M10e)
 void hw_actor_set_moving(int16_t id);               // mark moving this frame (walk anim)
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back

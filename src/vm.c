@@ -509,6 +509,8 @@ static const UBYTE vm_args_len[256] = {
     // actor properties (M10a): SET_MOVE_SPEED ref,speed; SET_HIDDEN ref,hidden; GET_DIR ref,dest
     // M10c: SET_ANIM_SET ref,state. M10d: ACTOR_EMOTE ref,emote
     [0x3E]=3, [0x3F]=3, [0x40]=4, [0x41]=3, [0x42]=3,
+    // M10e: SET_FLAGS ref,flags,mask; SET_COLL_ENABLED ref,on; MOVE_TO ref (blocking)
+    [0x44]=4, [0x45]=3, [0x46]=2,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
@@ -608,6 +610,14 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x40: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); *(UWORD *)vm_resolve_ref(THIS, A_I16(2)) = hw_actor_dir((INT16)r[0]); break; }
         case 0x41: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_anim_state((INT16)r[0], A_U8(2)); break; }
         case 0x42: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_emote((INT16)r[0], A_U8(2)); break; }
+        case 0x44: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_flags((INT16)r[0], A_U8(2), A_U8(3)); break; }
+        case 0x45: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_coll_enabled((INT16)r[0], A_U8(2)); break; }
+        // M10e: single-op Move To - the ref block is {ID, X, Y, ATTR}; face the
+        // dominant remaining axis, step both, rewind until arrival (like 0x38).
+        case 0x46: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));
+                     hw_actor_move_init((INT16)r[0], r[1], r[2]);
+                     if (!hw_actor_move_step((INT16)r[0], 2)) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; }
+                     break; }
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
         // trig + actor-angle opcodes (P0)
