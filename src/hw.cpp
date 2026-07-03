@@ -278,6 +278,23 @@ namespace
         return (collisions[ty * coll_w + tx] & 0x0f) != 0; // any COLLISION_* direction bit
     }
 
+    // M10b: actors are solid to each other (GB Studio parity - the player can't
+    // walk through an NPC). Tile-granular like the rest of the collision model.
+    // Hidden actors don't block, matching upstream. `self` never blocks itself.
+    bool is_blocked_subpx(int sx, int sy, int self)
+    {
+        if(is_solid_subpx(sx, sy)) return true;
+        const int tx = sx / SUBPX / 8, ty = sy / SUBPX / 8;
+        for(int i = 0; i < MAX_ACTORS; ++i)
+        {
+            if(i == self) continue;
+            const Actor& a = actors[i];
+            if(!a.active || !a.visible) continue;
+            if((int)a.x / SUBPX / 8 == tx && (int)a.y / SUBPX / 8 == ty) return true;
+        }
+        return false;
+    }
+
     // Screen fade (VM_FADE). fade_intensity: 0 = fully visible, 1 = fully black.
     // A fade runs over FADE_FRAMES frames toward its target; fade_dir is the active
     // direction (0 idle, -1 fading in, +1 fading out).
@@ -457,10 +474,10 @@ void hw_player_update(void)
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.
     const uint8_t spd = p.move_speed;
-    if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
-    else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
-    if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
-    else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+    if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_blocked_subpx(n, p.y, 0)) p.x = n; }
+    else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_blocked_subpx(n, p.y, 0)) p.x = n; }
+    if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_blocked_subpx(p.x, n, 0)) p.y = n; }
+    else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_blocked_subpx(p.x, n, 0)) p.y = n; }
 }
 
 void hw_overlay_move_to(int x, int y, int speed)
@@ -773,13 +790,14 @@ void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
 // Move one axis toward the destination by the actor's speed, snapping when within
 // range. `cross` is the other axis' position (for the collision check). Returns true
 // once that axis reaches its target OR a solid tile blocks it (the move stops there).
-static bool move_axis(uint16_t& pos, uint16_t dest, uint16_t cross, bool axis_x, uint8_t speed)
+static bool move_axis(uint16_t& pos, uint16_t dest, uint16_t cross, bool axis_x, uint8_t speed, int self)
 {
     const int d = int(dest) - int(pos);
     if(d == 0) return true;
     const uint16_t step = (d > 0) ? ((d <= speed) ? dest : (uint16_t)(pos + speed))
                                   : ((-d <= speed) ? dest : (uint16_t)(pos - speed));
-    if(axis_x ? is_solid_subpx(step, cross) : is_solid_subpx(cross, step)) return true; // blocked: stop
+    if(axis_x ? is_blocked_subpx(step, cross, self)
+              : is_blocked_subpx(cross, step, self)) return true; // blocked: stop
     pos = step;
     return pos == dest;
 }
@@ -796,8 +814,8 @@ int hw_actor_move_step(int16_t id, uint8_t axis)
     if(id < 0 || id >= MAX_ACTORS) return 1;
     Actor& a = actors[id];
     bool done = true;
-    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x, a.y, true, a.move_speed);
-    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y, a.x, false, a.move_speed);
+    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x, a.y, true, a.move_speed, id);
+    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y, a.x, false, a.move_speed, id);
     a.moving = true; // animate as walking until the move op stops re-running
     return done ? 1 : 0;
 }
