@@ -37,6 +37,7 @@
 #include "gba_font_assets.h" // generated: the project's default dialogue font
 #include "gba_music_assets.h" // generated: DMG music track index -> dmg_music_item (M5a)
 #include "gba_sfx_assets.h" // generated: sound index -> sound_item (M5b)
+#include "gba_emote_assets.h" // generated: emote index -> sprite (M10d)
 
 namespace
 {
@@ -246,6 +247,12 @@ namespace
     }
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
+
+    // Emote bubble state (M10d): one emote at a time, like the GB engine.
+    constexpr int EMOTE_FRAMES = 60;             // ~1s on screen
+    bn::optional<bn::sprite_ptr> emote_sprite;
+    int emote_timer = 0;
+    int emote_actor = -1;
     int current_scene = 0;                       // index for per-scene sprite lookup
     int scene_w_px = 240;                        // scene logical size (for camera bounds)
     int scene_h_px = 160;
@@ -321,6 +328,9 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     scene_bg = gba_create_scene_bg(scene_idx);
     scene_bg->set_camera(*camera);
     hw_overlay_hide(); // clear any dialogue box carried from the previous scene
+    emote_sprite.reset(); // drop any emote bubble from the previous scene (M10d)
+    emote_timer = 0;
+    emote_actor = -1;
     for(int i = 0; i < MAX_ACTORS; ++i)
     {
         actors[i].active = false;
@@ -397,6 +407,18 @@ void hw_render(void)
         {
             a.sprite->set_visible(false);
         }
+    }
+
+    // Emote bubble (M10d): follows its actor above the head, rising in over the
+    // first frames, then disappears when the timer runs out. Single slot, like GB.
+    if(emote_timer > 0 && emote_sprite && emote_actor >= 0)
+    {
+        const Actor& ea = actors[emote_actor];
+        const int shown = EMOTE_FRAMES - emote_timer;
+        const int lift = (shown < 8) ? shown : 8; // rise-in over the first 8 frames
+        emote_sprite->set_position(to_world_x(ea.x), to_world_y(ea.y) - 12 - lift);
+        emote_sprite->set_visible(ea.active && ea.visible && !sprites_hidden);
+        if(--emote_timer == 0) emote_sprite.reset();
     }
 }
 
@@ -821,6 +843,20 @@ void hw_actor_set_move_speed(int16_t id, uint8_t speed)
 {
     if(id < 0 || id >= MAX_ACTORS) return;
     actors[id].move_speed = speed ? speed : 1;
+}
+
+// M10d: show an emote bubble above the actor's head for ~1s (VM_ACTOR_EMOTE).
+// One bubble at a time (a new emote replaces the current one, like GB).
+void hw_actor_emote(int16_t id, uint8_t emote)
+{
+    if(id < 0 || id >= MAX_ACTORS || !actors[id].active) return;
+    const bn::sprite_item* item = gba_emote_sprite(emote);
+    if(!item) return;
+    emote_sprite = item->create_sprite(0, 0);
+    if(camera) emote_sprite->set_camera(*camera);
+    emote_sprite->set_bg_priority(2); // in front of the scene bg (3)
+    emote_timer = EMOTE_FRAMES;
+    emote_actor = id;
 }
 
 // M10c: switch the actor's animation state (VM_ACTOR_SET_ANIM_SET). The operand
