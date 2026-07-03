@@ -55,6 +55,7 @@ namespace
         uint16_t dest_x = 0;             // move-to target in subpixels
         uint16_t dest_y = 0;
         uint8_t dir = 0;                 // facing: 0 down, 1 right, 2 up, 3 left
+        uint8_t move_speed = MOVE_SPEED; // subpixels/frame (32 = 1px/frame); per-actor (M10a)
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
         uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
         bn::optional<bn::sprite_ptr> sprite;   // created lazily on first render
@@ -455,10 +456,11 @@ void hw_player_update(void)
     Actor& p = actors[0];
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.
-    if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + MOVE_SPEED; if(!is_solid_subpx(n, p.y)) p.x = n; }
-    else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - MOVE_SPEED; if(!is_solid_subpx(n, p.y)) p.x = n; }
-    if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - MOVE_SPEED; if(!is_solid_subpx(p.x, n)) p.y = n; }
-    else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + MOVE_SPEED; if(!is_solid_subpx(p.x, n)) p.y = n; }
+    const uint8_t spd = p.move_speed;
+    if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+    else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+    if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+    else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
 }
 
 void hw_overlay_move_to(int x, int y, int speed)
@@ -768,15 +770,15 @@ void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
     a.moving = false; // a placement is not movement; don't trigger the walk frames
 }
 
-// Move one axis toward the destination by MOVE_SPEED, snapping when within range.
-// `cross` is the other axis' position (for the collision check). Returns true once
-// that axis reaches its target OR a solid tile blocks it (the move stops there).
-static bool move_axis(uint16_t& pos, uint16_t dest, uint16_t cross, bool axis_x)
+// Move one axis toward the destination by the actor's speed, snapping when within
+// range. `cross` is the other axis' position (for the collision check). Returns true
+// once that axis reaches its target OR a solid tile blocks it (the move stops there).
+static bool move_axis(uint16_t& pos, uint16_t dest, uint16_t cross, bool axis_x, uint8_t speed)
 {
     const int d = int(dest) - int(pos);
     if(d == 0) return true;
-    const uint16_t step = (d > 0) ? ((d <= MOVE_SPEED) ? dest : (uint16_t)(pos + MOVE_SPEED))
-                                  : ((-d <= MOVE_SPEED) ? dest : (uint16_t)(pos - MOVE_SPEED));
+    const uint16_t step = (d > 0) ? ((d <= speed) ? dest : (uint16_t)(pos + speed))
+                                  : ((-d <= speed) ? dest : (uint16_t)(pos - speed));
     if(axis_x ? is_solid_subpx(step, cross) : is_solid_subpx(cross, step)) return true; // blocked: stop
     pos = step;
     return pos == dest;
@@ -794,8 +796,8 @@ int hw_actor_move_step(int16_t id, uint8_t axis)
     if(id < 0 || id >= MAX_ACTORS) return 1;
     Actor& a = actors[id];
     bool done = true;
-    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x, a.y, true);
-    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y, a.x, false);
+    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x, a.y, true, a.move_speed);
+    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y, a.x, false, a.move_speed);
     a.moving = true; // animate as walking until the move op stops re-running
     return done ? 1 : 0;
 }
@@ -807,6 +809,21 @@ void hw_actor_move_set_dir(int16_t id, uint8_t axis)
     if(axis == 0) { const int d = int(a.dest_x) - int(a.x); if(d) a.dir = (d > 0) ? 1 : 3; }
     else          { const int d = int(a.dest_y) - int(a.y); if(d) a.dir = (d > 0) ? 0 : 2; }
     a.moving = true;
+}
+
+// M10a: per-actor movement speed (subpixels/frame; GB Studio speed 1 = 32).
+void hw_actor_set_move_speed(int16_t id, uint8_t speed)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].move_speed = speed ? speed : 1;
+}
+
+// M10a: hide/show an actor's sprite (Actor Show / Actor Hide events). A hidden
+// actor keeps updating (scripts, movement) - only rendering is suppressed.
+void hw_actor_set_hidden(int16_t id, uint8_t hidden)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].visible = !hidden;
 }
 
 void hw_actor_move_cancel(int16_t id)

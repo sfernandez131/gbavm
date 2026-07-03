@@ -49,6 +49,7 @@ typedef struct GbaActorInit {
     unsigned short x;      // initial position in subpixels (256 per 8px tile)
     unsigned short y;
     unsigned char * interact; // M6c: script run when the player faces this actor + presses A (0 if none)
+    unsigned char move_speed; // M10a: authored speed in subpixels/frame (32 = 1px/frame); 0 = engine default
 } GbaActorInit;
 
 // A trigger zone (M6b): when the player enters its tile rect, its script runs once.

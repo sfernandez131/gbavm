@@ -65,6 +65,8 @@ int  hw_actor_move_step(int16_t id, uint8_t axis); // axis 0=X 1=Y 2=both; 1 whe
 void hw_actor_move_set_dir(int16_t id, uint8_t axis); // face toward dest along axis 0=X 1=Y
 void hw_actor_move_cancel(int16_t id);              // stop moving (clear destination)
 void hw_actor_set_dir(int16_t id, uint8_t dir);     // 0x34 explicit facing
+void hw_actor_set_move_speed(int16_t id, uint8_t speed); // 0x3E subpx/frame, 32 = 1px (M10a)
+void hw_actor_set_hidden(int16_t id, uint8_t hidden);    // 0x3F hide/show the sprite (M10a)
 void hw_actor_set_moving(int16_t id);               // mark moving this frame (walk anim)
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back

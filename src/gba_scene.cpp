@@ -67,6 +67,8 @@ void gba_load_scene(unsigned int idx)
         const GbaActorInit & ai = s.actors_init[i];
         if(ai.index == 0 && keep_player) hw_actor_place(0, keep[1], keep[2], keep_dir);
         else hw_actor_place(ai.index, ai.x, ai.y, ai.dir);
+        // Authored movement speed (M10a); 0 keeps the engine default.
+        if(ai.move_speed) hw_actor_set_move_speed(ai.index, ai.move_speed);
     }
 
     script_execute(0, s.init, nullptr, 0); // scene init: runs once (may reposition)
