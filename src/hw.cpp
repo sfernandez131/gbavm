@@ -56,6 +56,7 @@ namespace
         uint16_t dest_y = 0;
         uint8_t dir = 0;                 // facing: 0 down, 1 right, 2 up, 3 left
         uint8_t move_speed = MOVE_SPEED; // subpixels/frame (32 = 1px/frame); per-actor (M10a)
+        uint8_t anim_state = 0;          // animation state row (M10c); 0 = default
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
         uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
         bn::optional<bn::sprite_ptr> sprite;   // created lazily on first render
@@ -378,8 +379,11 @@ void hw_render(void)
             }
             if(item)
             {
-                // Select a frame for the actor's facing + moving state and animate.
-                const int anim = (a.dir & 3) + (a.moving ? 4 : 0);
+                // Select a frame for the actor's animation state + facing + moving
+                // and animate. States are rows of 8 engine animations (M10c); an
+                // out-of-range state falls back to the default row 0.
+                const int st = (a.anim_state < GBA_ANIM_STATES) ? a.anim_state : 0;
+                const int anim = st * 8 + (a.dir & 3) + (a.moving ? 4 : 0);
                 const int len = def->anim_len[anim] ? def->anim_len[anim] : 1;
                 const int frame = def->anim_start[anim] + ((a.anim_timer >> 3) % len);
                 a.sprite->set_tiles(item->tiles_item(), frame);
@@ -768,6 +772,7 @@ void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
     a.y = y;
     a.dir = dir & 3;
     a.moving = false; // a placement is not movement; don't trigger the walk frames
+    a.anim_state = 0; // scene placement resets to the default animation state (M10c)
 }
 
 // Move one axis toward the destination by the actor's speed, snapping when within
@@ -816,6 +821,17 @@ void hw_actor_set_move_speed(int16_t id, uint8_t speed)
 {
     if(id < 0 || id >= MAX_ACTORS) return;
     actors[id].move_speed = speed ? speed : 1;
+}
+
+// M10c: switch the actor's animation state (VM_ACTOR_SET_ANIM_SET). The operand
+// is the project-global state index (STATE_* in game_globals.i); render clamps
+// unknown states to the default row, so sprites without that state just keep
+// their normal animations.
+void hw_actor_set_anim_state(int16_t id, uint8_t state)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    if(a.anim_state != state) { a.anim_state = state; a.anim_timer = 0; }
 }
 
 // M10a: hide/show an actor's sprite (Actor Show / Actor Hide events). A hidden
