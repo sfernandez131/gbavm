@@ -71,6 +71,10 @@ void gba_load_scene(unsigned int idx)
         if(ai.move_speed) hw_actor_set_move_speed(ai.index, ai.move_speed);
         // Authored collision group (M10f; the player row carries 0x01).
         hw_actor_set_collision_group(ai.index, ai.collision_group);
+        // On Hit (M10g): a projectile hit fires the actor's combined
+        // interact/hit script (its param branches pick the On Hit tab); the
+        // player (actor 0) uses the scene's player-hit script instead.
+        hw_actor_set_hit_script(ai.index, ai.index == 0 ? s.player_hit : ai.interact);
     }
 
     // Preload the scene's projectile defs into the runtime slots (M10f) - GB
@@ -106,7 +110,11 @@ extern "C" void gba_check_triggers(void)
     if(in != current_trigger)
     {
         current_trigger = in;
-        if(in >= 0) script_execute(0, s.triggers[in].script, nullptr, 0);
+        // Parameter 1 = the on-enter section (M10g): a trigger with BOTH enter and
+        // leave scripts compiles them into one script branching on thread arg 0
+        // (1 = enter, 2 = leave; leave isn't fired on GBA yet). A trigger with only
+        // an enter script is collapsed by the compiler and ignores the arg.
+        if(in >= 0) script_execute(0, s.triggers[in].script, nullptr, 1, 1);
     }
 }
 
@@ -123,7 +131,11 @@ extern "C" void gba_check_interact(void)
         const GbaActorInit & ai = s.actors_init[i];
         if(ai.index == (unsigned char)actor && ai.interact)
         {
-            script_execute(0, ai.interact, nullptr, 0);
+            // Pass parameter 0 (M10g): an actor with a collision group compiles
+            // its interact + On Hit tabs into ONE script that branches on thread
+            // arg 0 (GET_TLOCAL) - 0 selects the interact section. Plain interact
+            // scripts never read the arg, so this is safe for them too.
+            script_execute(0, ai.interact, nullptr, 1, 0);
             return;
         }
     }

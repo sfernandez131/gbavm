@@ -95,6 +95,9 @@ typedef struct GbaScene {
     unsigned int triggers_count;
     const GbaProjectileDef * projectiles; // M10f: defs preloaded into the runtime slots on load
     unsigned int projectiles_count;
+    // M10g: the scene's combined player-hit script (branches on the projectile's
+    // collision group via GET_TLOCAL 0), run when a projectile hits actor 0. 0 = none.
+    unsigned char * player_hit;
 } GbaScene;
 
 // Global projectile-def tables (M10f): every VM_PROJECTILE_LOAD_TYPE source table,

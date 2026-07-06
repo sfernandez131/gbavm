@@ -73,6 +73,11 @@ void hw_actor_set_flags(int16_t id, uint8_t flags, uint8_t mask); // 0x44 GB act
 void hw_actor_set_coll_enabled(int16_t id, uint8_t enabled);      // 0x45 collision blocker on/off (M10e)
 // M10f: the actor's GB collision group bit (projectile hit matching; player = 0x01).
 void hw_actor_set_collision_group(int16_t id, uint8_t group);
+// M10g: the script run when a projectile hits this actor (the actor's combined
+// interact/hit script; the scene's player-hit script for actor 0). The engine
+// passes the projectile's collision group as thread arg 0 so the script's
+// GET_TLOCAL param branches select the right On Hit tab. 0 = none.
+void hw_actor_set_hit_script(int16_t id, unsigned char* script);
 void hw_actor_set_moving(int16_t id);               // mark moving this frame (walk anim)
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back

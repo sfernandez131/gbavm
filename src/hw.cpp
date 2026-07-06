@@ -63,6 +63,8 @@ namespace
         bool anim_noloop = false;        // M10e: clamp on the last frame instead of looping
         bool coll_enabled = true;        // M10e: false = doesn't block other actors
         uint8_t collision_group = 0;     // M10f: GB collision group bit (player 0x01)
+        unsigned char* hit_script = nullptr; // M10g: run on projectile hit (combined param script)
+        uint16_t hit_handle = SCRIPT_TERMINATED; // M10g: refire gate (only when terminated)
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
         uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
         bn::optional<bn::sprite_ptr> sprite;   // created lazily on first render
@@ -367,6 +369,8 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
         actors[i].active = false;
         actors[i].sprite.reset();
         actors[i].collision_group = 0; // re-set per scene from GbaActorInit (M10f)
+        actors[i].hit_script = nullptr; // re-set per scene (M10g)
+        actors[i].hit_handle = SCRIPT_TERMINATED;
     }
 }
 
@@ -502,6 +506,17 @@ void hw_render(void)
             const int ady = p.y / SUBPX - int(act.y) / SUBPX;
             if(adx > -12 && adx < 12 && ady > -12 && ady < 12)
             {
+                // On Hit (M10g): run the actor's combined hit script with the
+                // projectile's collision group as thread arg 0 (the script's
+                // param branches pick the On Hit tab). One at a time per actor,
+                // GB parity: refire only after the previous run terminated.
+                Actor& hit = actors[a];
+                if(hit.hit_script && (hit.hit_handle & SCRIPT_TERMINATED))
+                {
+                    hit.hit_handle = 0;
+                    script_execute(0, hit.hit_script, &hit.hit_handle, 1,
+                                   (int)p.def.collision_group);
+                }
                 if(!p.def.strong) { p.active = false; p.sprite.reset(); }
                 break;
             }
@@ -991,6 +1006,15 @@ void hw_actor_set_collision_group(int16_t id, uint8_t group)
 {
     if(id < 0 || id >= MAX_ACTORS) return;
     actors[id].collision_group = group;
+}
+
+// M10g: the script fired when a projectile hits this actor (0 = none). Set from
+// GbaActorInit on scene load; the scene's player-hit script for actor 0.
+void hw_actor_set_hit_script(int16_t id, unsigned char* script)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].hit_script = script;
+    actors[id].hit_handle = SCRIPT_TERMINATED;
 }
 
 // M10c: switch the actor's animation state (VM_ACTOR_SET_ANIM_SET). The operand
