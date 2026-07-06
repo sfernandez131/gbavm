@@ -63,6 +63,7 @@ namespace
         bool anim_noloop = false;        // M10e: clamp on the last frame instead of looping
         bool coll_enabled = true;        // M10e: false = doesn't block other actors
         uint8_t collision_group = 0;     // M10f: GB collision group bit (player 0x01)
+        int sprite_sheet = -1;           // M10h: global-sprite override (-1 = the scene's sheet)
         unsigned char* hit_script = nullptr; // M10g: run on projectile hit (combined param script)
         uint16_t hit_handle = SCRIPT_TERMINATED; // M10g: refire gate (only when terminated)
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
@@ -371,6 +372,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
         actors[i].collision_group = 0; // re-set per scene from GbaActorInit (M10f)
         actors[i].hit_script = nullptr; // re-set per scene (M10g)
         actors[i].hit_handle = SCRIPT_TERMINATED;
+        actors[i].sprite_sheet = -1;    // back to the scene's sheet (M10h)
     }
 }
 
@@ -415,7 +417,9 @@ void hw_render(void)
         Actor& a = actors[i];
         if(a.active)
         {
-            const GbaActorSprite* def = gba_actor_sprite(current_scene, i);
+            const GbaActorSprite* def = (a.sprite_sheet >= 0)
+                ? gba_global_sprite(a.sprite_sheet)      // runtime override (M10h)
+                : gba_actor_sprite(current_scene, i);
             const bn::sprite_item* item = (def && def->item) ? def->item : nullptr;
             if(!a.sprite)
             {
@@ -523,7 +527,7 @@ void hw_render(void)
         }
         if(!p.active) continue;
 
-        const GbaActorSprite* def = gba_projectile_sprite(p.def.sprite);
+        const GbaActorSprite* def = gba_global_sprite(p.def.sprite);
         const bn::sprite_item* item = (def && def->item) ? def->item : nullptr;
         if(!item) continue;
         if(!p.sprite)
@@ -1008,6 +1012,19 @@ void hw_actor_set_collision_group(int16_t id, uint8_t group)
     actors[id].collision_group = group;
 }
 
+// M10h: swap the actor's spritesheet (VM_ACTOR_SET_SPRITESHEET). The sprite is
+// recreated from the new item on the next render; the animation restarts on the
+// current facing/state (rows come from the new sheet's tables).
+void hw_actor_set_spritesheet(int16_t id, uint8_t sheet)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    if(a.sprite_sheet == (int)sheet) return;
+    a.sprite_sheet = (int)sheet;
+    a.sprite.reset();
+    a.anim_timer = 0;
+}
+
 // M10g: the script fired when a projectile hits this actor (0 = none). Set from
 // GbaActorInit on scene load; the scene's player-hit script for actor 0.
 void hw_actor_set_hit_script(int16_t id, unsigned char* script)
@@ -1162,7 +1179,7 @@ void hw_projectile_launch(uint8_t slot, uint16_t x, uint16_t y, uint8_t angle)
         else if(angle > 96)  dir = 0; // down
         else if(angle >= 32) dir = 1; // right
     }
-    const GbaActorSprite* sdef = gba_projectile_sprite(p->def.sprite);
+    const GbaActorSprite* sdef = gba_global_sprite(p->def.sprite);
     if(sdef && sdef->anim_start)
     {
         const int st = (p->def.anim_state < GBA_ANIM_STATES) ? p->def.anim_state : 0;
