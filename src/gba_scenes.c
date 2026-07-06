@@ -15,3 +15,8 @@ const GbaScene gba_scenes[] = {
 };
 const unsigned int gba_scenes_count = 2;
 const unsigned int gba_start_scene = 0;
+
+// Global projectile-def tables (M10f): empty in the committed baseline (a single
+// zero row - C forbids zero-size arrays; the engine iterates by the count).
+const GbaProjectileDef gba_global_projectile_defs[] = { { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } };
+const unsigned int gba_global_projectile_defs_count = 0;

@@ -50,7 +50,28 @@ typedef struct GbaActorInit {
     unsigned short y;
     unsigned char * interact; // M6c: script run when the player faces this actor + presses A (0 if none)
     unsigned char move_speed; // M10a: authored speed in subpixels/frame (32 = 1px/frame); 0 = engine default
+    unsigned char collision_group; // M10f: GB collision group bit (player 0x01, "1" 0x02, "2" 0x04, "3" 0x08)
 } GbaActorInit;
+
+// One projectile definition (M10f) - GB Studio's projectile_def_t mapped to the GBA
+// asset model: `sprite` indexes the generated gba_projectile_sprite() table and
+// `anim_state` selects the sprite's animation-state row (the projectile's 4
+// direction anims are that row's idle set), replacing GB's sprite far-ptr +
+// baked animation ranges. A scene's defs load into the engine's 5 runtime slots
+// on scene load (GB data_manager parity); VM_PROJECTILE_LOAD_TYPE loads one from
+// gba_global_projectile_defs[] instead.
+typedef struct GbaProjectileDef {
+    unsigned char sprite;          // index into the generated projectile sprite table
+    unsigned char anim_state;      // animation-state row (statesOrder index)
+    unsigned char move_speed;      // subpixels/frame (32 = 1px/frame)
+    unsigned short life_time;      // frames until auto-despawn
+    unsigned char collision_group; // group bit this projectile belongs to
+    unsigned char collision_mask;  // actor groups it can hit
+    unsigned char strong;          // 1 = survives hits (GB !destroyOnHit)
+    unsigned char anim_tick;       // frame-advance mask: advance when (tick & mask) == 0
+    unsigned char anim_noloop;     // 1 = clamp on the last frame instead of looping
+    unsigned short initial_offset; // spawn offset along the launch angle, in subpixels
+} GbaProjectileDef;
 
 // A trigger zone (M6b): when the player enters its tile rect, its script runs once.
 typedef struct GbaTrigger {
@@ -72,7 +93,15 @@ typedef struct GbaScene {
     const unsigned char * collisions; // one byte per tile (row-major, width_px/8 wide); 0 = open
     const GbaTrigger * triggers; // trigger zones (M6b)
     unsigned int triggers_count;
+    const GbaProjectileDef * projectiles; // M10f: defs preloaded into the runtime slots on load
+    unsigned int projectiles_count;
 } GbaScene;
+
+// Global projectile-def tables (M10f): every VM_PROJECTILE_LOAD_TYPE source table,
+// flattened into one array. The bridge resolves each `_global_projectiles_<n>`
+// symbol to its table's base index here; the op's source def = defs[base + src].
+extern const GbaProjectileDef gba_global_projectile_defs[];
+extern const unsigned int gba_global_projectile_defs_count;
 
 // The project's scenes + which one to load at boot (both emitted by GBA Studio).
 extern const GbaScene gba_scenes[];

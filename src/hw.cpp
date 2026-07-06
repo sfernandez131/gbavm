@@ -8,6 +8,8 @@
 // hw_render(), so VM opcode handlers never touch Butano objects directly.
 
 #include "hw.h"
+#include "gba_link.h" // GbaProjectileDef (M10f)
+#include "vm.h"       // vm_sine (projectile launch math, M10f)
 
 #include "bn_core.h"
 #include "bn_color.h"
@@ -60,6 +62,7 @@ namespace
         uint8_t anim_state = 0;          // animation state row (M10c); 0 = default
         bool anim_noloop = false;        // M10e: clamp on the last frame instead of looping
         bool coll_enabled = true;        // M10e: false = doesn't block other actors
+        uint8_t collision_group = 0;     // M10f: GB collision group bit (player 0x01)
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
         uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
         bn::optional<bn::sprite_ptr> sprite;   // created lazily on first render
@@ -255,6 +258,26 @@ namespace
     bn::optional<bn::sprite_ptr> emote_sprite;
     int emote_timer = 0;
     int emote_actor = -1;
+
+    // Projectile pool (M10f) - GB parity: 5 runtime def slots (loaded from the
+    // scene on load / VM_PROJECTILE_LOAD_TYPE) + 5 in-flight instances.
+    constexpr int MAX_PROJECTILES = 5;
+    constexpr int MAX_PROJECTILE_DEFS = 5;
+    GbaProjectileDef projectile_defs[MAX_PROJECTILE_DEFS] = {};
+    struct Projectile
+    {
+        bool active = false;
+        GbaProjectileDef def = {};       // copied from the slot at launch
+        int x = 0, y = 0;                // position in subpixels (signed: may leave the scene)
+        int dx = 0, dy = 0;              // per-frame delta in subpixels
+        int life = 0;                    // frames left
+        uint8_t frame = 0;               // current sheet frame
+        uint8_t frame_start = 0;         // the launch direction's animation range
+        uint8_t frame_len = 1;
+        uint8_t tick = 0;                // frame counter for the anim_tick mask
+        bn::optional<bn::sprite_ptr> sprite;
+    };
+    Projectile projectiles[MAX_PROJECTILES];
     int current_scene = 0;                       // index for per-scene sprite lookup
     int scene_w_px = 240;                        // scene logical size (for camera bounds)
     int scene_h_px = 160;
@@ -333,10 +356,17 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     emote_sprite.reset(); // drop any emote bubble from the previous scene (M10d)
     emote_timer = 0;
     emote_actor = -1;
+    for(int i = 0; i < MAX_PROJECTILES; ++i) // clear in-flight projectiles + def slots (M10f)
+    {
+        projectiles[i].active = false;
+        projectiles[i].sprite.reset();
+        projectile_defs[i] = GbaProjectileDef{};
+    }
     for(int i = 0; i < MAX_ACTORS; ++i)
     {
         actors[i].active = false;
         actors[i].sprite.reset();
+        actors[i].collision_group = 0; // re-set per scene from GbaActorInit (M10f)
     }
 }
 
@@ -423,6 +453,72 @@ void hw_render(void)
         emote_sprite->set_position(to_world_x(ea.x), to_world_y(ea.y) - 12 - lift);
         emote_sprite->set_visible(ea.active && ea.visible && !sprites_hidden);
         if(--emote_timer == 0) emote_sprite.reset();
+    }
+
+    // Projectiles (M10f): move, animate, cull, hit-test, render. GB parity:
+    // life_time expiry, off-view culling (GB culls outside the screen +/- 2 tiles),
+    // anim advance when (tick & anim_tick) == 0, AABB hit vs actors whose
+    // collision_group is in the mask (a hit removes the projectile unless strong;
+    // the actor's On Hit script is the next slice, M10g).
+    for(int i = 0; i < MAX_PROJECTILES; ++i)
+    {
+        Projectile& p = projectiles[i];
+        if(!p.active) continue;
+        if(--p.life <= 0) { p.active = false; p.sprite.reset(); continue; }
+
+        p.x += p.dx;
+        p.y += p.dy;
+
+        // Cull when leaving the camera view + a 16px margin (positions are signed
+        // ints here, so flying past the scene origin can't wrap).
+        const int wx = p.x / SUBPX - scene_w_px / 2;
+        const int wy = p.y / SUBPX - scene_h_px / 2;
+        const int cam_x = camera ? camera->x().right_shift_integer() : 0;
+        const int cam_y = camera ? camera->y().right_shift_integer() : 0;
+        if(wx < cam_x - (HALF_W + 16) || wx > cam_x + (HALF_W + 16) ||
+           wy < cam_y - (HALF_H + 16) || wy > cam_y + (HALF_H + 16))
+        {
+            p.active = false;
+            p.sprite.reset();
+            continue;
+        }
+
+        // Animate: advance a frame when the tick counter matches the mask, looping
+        // (or clamping, anim_noloop) within the launch direction's range.
+        if((++p.tick & p.def.anim_tick) == 0 && p.frame_len > 1)
+        {
+            if(p.frame + 1 < p.frame_start + p.frame_len) ++p.frame;
+            else if(!p.def.anim_noloop) p.frame = p.frame_start;
+        }
+
+        // Hit test vs actors (12px AABB around both centres). Uses the same actor
+        // gates as solidity (M10b/M10e): active + visible + collision-enabled.
+        for(int a = 0; a < MAX_ACTORS; ++a)
+        {
+            const Actor& act = actors[a];
+            if(!act.active || !act.visible || !act.coll_enabled) continue;
+            if(!(act.collision_group & p.def.collision_mask)) continue;
+            const int adx = p.x / SUBPX - int(act.x) / SUBPX;
+            const int ady = p.y / SUBPX - int(act.y) / SUBPX;
+            if(adx > -12 && adx < 12 && ady > -12 && ady < 12)
+            {
+                if(!p.def.strong) { p.active = false; p.sprite.reset(); }
+                break;
+            }
+        }
+        if(!p.active) continue;
+
+        const GbaActorSprite* def = gba_projectile_sprite(p.def.sprite);
+        const bn::sprite_item* item = (def && def->item) ? def->item : nullptr;
+        if(!item) continue;
+        if(!p.sprite)
+        {
+            p.sprite = item->create_sprite(0, 0);
+            if(camera) p.sprite->set_camera(*camera);
+        }
+        p.sprite->set_tiles(item->tiles_item(), p.frame);
+        p.sprite->set_position(wx, wy);
+        p.sprite->set_visible(!sprites_hidden);
     }
 }
 
@@ -889,6 +985,14 @@ void hw_actor_set_coll_enabled(int16_t id, uint8_t enabled)
     actors[id].coll_enabled = (enabled != 0);
 }
 
+// M10f: the actor's GB collision group bit, set from GbaActorInit on scene load
+// (player 0x01). Projectiles hit an actor when its group is in their mask.
+void hw_actor_set_collision_group(int16_t id, uint8_t group)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].collision_group = group;
+}
+
 // M10c: switch the actor's animation state (VM_ACTOR_SET_ANIM_SET). The operand
 // is the project-global state index (STATE_* in game_globals.i); render clamps
 // unknown states to the default row, so sprites without that state just keep
@@ -987,4 +1091,88 @@ void hw_input_get(uint16_t* dst, uint8_t joyid)
     if(bn::keypad::select_held()) m |= 0x40;
     if(bn::keypad::start_held())  m |= 0x80;
     *dst = m;
+}
+
+// --- projectiles (M10f) -------------------------------------------------------
+
+// Copy a def into a runtime slot. Scene defs load on scene load (gba_load_scene,
+// GB data_manager parity); VM_PROJECTILE_LOAD_TYPE loads from the global tables.
+void hw_projectile_load_def(uint8_t slot, const GbaProjectileDef* def)
+{
+    if(slot >= MAX_PROJECTILE_DEFS || !def) return;
+    projectile_defs[slot] = *def;
+}
+
+// 0x81 VM_PROJECTILE_LOAD_TYPE: `index` = the source table's base index in the
+// flattened gba_global_projectile_defs[] plus the in-table def index.
+void hw_projectile_load_global(uint8_t slot, uint8_t index)
+{
+    if(index >= gba_global_projectile_defs_count) return;
+    hw_projectile_load_def(slot, &gba_global_projectile_defs[index]);
+}
+
+// 0x80 VM_PROJECTILE_LAUNCH: spawn an instance of def slot `slot` at (x, y)
+// subpixels, travelling at 8-bit BRADS `angle` (0 up, 64 right, 128 down,
+// 192 left). Replicates GB Studio's projectile_launch: pick the direction
+// animation from the angle quadrant, offset the spawn point by initial_offset
+// along the angle (axis-aligned fast paths for the four exact directions),
+// and set the per-frame delta from the sine table.
+void hw_projectile_launch(uint8_t slot, uint16_t x, uint16_t y, uint8_t angle)
+{
+    if(slot >= MAX_PROJECTILE_DEFS) return;
+    Projectile* p = nullptr;
+    for(int i = 0; i < MAX_PROJECTILES; ++i)
+    {
+        if(!projectiles[i].active) { p = &projectiles[i]; break; }
+    }
+    if(!p) return; // pool exhausted, like GB (silently no-op)
+
+    p->def = projectile_defs[slot];
+
+    // Angle quadrant -> direction animation (GB's thresholds; our dir encoding
+    // 0 down, 1 right, 2 up, 3 left).
+    uint8_t dir = 2; // up
+    if(angle <= 224)
+    {
+        if(angle >= 160)     dir = 3; // left
+        else if(angle > 96)  dir = 0; // down
+        else if(angle >= 32) dir = 1; // right
+    }
+    const GbaActorSprite* sdef = gba_projectile_sprite(p->def.sprite);
+    if(sdef && sdef->anim_start)
+    {
+        const int st = (p->def.anim_state < GBA_ANIM_STATES) ? p->def.anim_state : 0;
+        const int anim = st * 8 + dir; // the state row's idle set (M10c layout)
+        p->frame_start = sdef->anim_start[anim];
+        p->frame_len = sdef->anim_len[anim] ? sdef->anim_len[anim] : 1;
+    }
+    else
+    {
+        p->frame_start = 0;
+        p->frame_len = 1;
+    }
+    p->frame = p->frame_start;
+    p->tick = 0;
+
+    p->x = int(x);
+    p->y = int(y);
+    const int offset = p->def.initial_offset;
+    const int speed = p->def.move_speed;
+    if(angle == 192)      { p->x -= offset; p->dx = -speed; p->dy = 0; } // left
+    else if(angle == 64)  { p->x += offset; p->dx =  speed; p->dy = 0; } // right
+    else if(angle == 0)   { p->y -= offset; p->dx = 0; p->dy = -speed; } // up
+    else if(angle == 128) { p->y += offset; p->dx = 0; p->dy =  speed; } // down
+    else
+    {
+        const int sinv = vm_sine(angle);
+        const int cosv = vm_sine((uint8_t)(angle + 64u));
+        p->x += (sinv * offset) >> 7;
+        p->y -= (cosv * offset) >> 7;
+        p->dx = (sinv * speed) >> 7;
+        p->dy = -((cosv * speed) >> 7);
+    }
+
+    p->life = p->def.life_time > 0 ? p->def.life_time : 1;
+    p->active = true;
+    p->sprite.reset(); // created lazily on the next render
 }

@@ -149,6 +149,9 @@ extern UWORD sys_time;
 
 // seed the VM PRNG at boot (GBA has no DIV register; pass a hardware-timer value)
 void vm_boot_seed(UWORD seed);
+// sine of an 8-bit BRADS angle, scaled -127..127 (the GB Studio sine table);
+// cos(a) = vm_sine(a + 64). Used by the projectile launch math (hw.cpp, M10f).
+INT8 vm_sine(UBYTE angle);
 // initialize / reset the script runner contexts
 void script_runner_init(UBYTE reset);
 // start a script in a newly allocated context

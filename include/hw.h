@@ -71,6 +71,8 @@ void hw_actor_set_anim_state(int16_t id, uint8_t state); // 0x41 animation state
 void hw_actor_emote(int16_t id, uint8_t emote);          // 0x42 emote bubble ~1s (M10d)
 void hw_actor_set_flags(int16_t id, uint8_t flags, uint8_t mask); // 0x44 GB actor flags (M10e)
 void hw_actor_set_coll_enabled(int16_t id, uint8_t enabled);      // 0x45 collision blocker on/off (M10e)
+// M10f: the actor's GB collision group bit (projectile hit matching; player = 0x01).
+void hw_actor_set_collision_group(int16_t id, uint8_t group);
 void hw_actor_set_moving(int16_t id);               // mark moving this frame (walk anim)
 void hw_actor_set_pos(uint16_t* pos);             // 0x35  pos -> {int16 ID, uint16 X, uint16 Y}
 void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back
@@ -108,6 +110,17 @@ void hw_music_play(int track, int loop);           // 0x60  play DMG track (loop
 void hw_music_stop(void);                          // 0x61  stop DMG music
 void hw_sfx_play(int sfx);                          // 0x66  play a .wav sound effect
 void hw_sound_mastervol(int vol);                  // 0x63  set the master volume (0..8)
+
+// --- projectiles (M10f) ---
+struct GbaProjectileDef;
+// Copy a def into runtime slot `slot` (0..4). Scene defs are loaded by
+// gba_load_scene; VM_PROJECTILE_LOAD_TYPE (0x81) loads from the global tables.
+void hw_projectile_load_def(uint8_t slot, const struct GbaProjectileDef* def);
+// 0x81: load global def `index` (table base + src) into `slot`.
+void hw_projectile_load_global(uint8_t slot, uint8_t index);
+// 0x80 VM_PROJECTILE_LAUNCH: spawn an instance of slot `slot` at (x, y) subpixels
+// travelling at 8-bit BRADS `angle` (0 up, 64 right, 128 down, 192 left).
+void hw_projectile_launch(uint8_t slot, uint16_t x, uint16_t y, uint8_t angle);
 
 #ifdef __cplusplus
 }

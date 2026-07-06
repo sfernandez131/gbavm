@@ -101,6 +101,7 @@ static const INT8 sine_wave[256] = {
 -90,-88,-85,-83,-81,-78,-76,-73,-71,-68,-65,-63,-60,-57,-54,-51,-49,-46,-43,-40,-37,-34,-31,-28,-25,-22,-19,-16,-12,-9,-6,-3};
 static inline INT8 SIN(UBYTE a){ return sine_wave[a]; }
 static inline INT8 COS(UBYTE a){ return sine_wave[(UBYTE)(a + 64u)]; }
+INT8 vm_sine(UBYTE a){ return sine_wave[a]; } // exported for hw.cpp (projectiles, M10f)
 static void vm_sin_scale(SCRIPT_CTX * THIS, INT16 idx, INT16 idx_angle, UBYTE accuracy) {
     INT16 * res = I16P(idx); INT16 * angle = I16P(idx_angle);
     *res = (INT16)((*res * (SIN((UBYTE)*angle) >> (7 - accuracy))) >> accuracy);
@@ -513,6 +514,8 @@ static const UBYTE vm_args_len[256] = {
     [0x44]=4, [0x45]=3, [0x46]=2,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
+    // projectiles (M10f): LAUNCH slot,idx->{x,y,angle}; LOAD_TYPE dest,src,base
+    [0x80]=3, [0x81]=3,
     // scene-boot opcodes accepted as no-ops (no GBA equivalent / handled elsewhere)
     [0x57]=1, [0x5D]=1,
     // DMG music (M5a): MUSIC_PLAY track,loop; MUSIC_STOP. SFX_PLAY sfx (M5b)
@@ -620,6 +623,10 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
                      break; }
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
+        // projectiles (M10f). LAUNCH's i16 operand resolves to an {x, y, angle}
+        // block on the VM stack (GB Studio pushes 3 words + passes .ARG2).
+        case 0x80: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(1)); hw_projectile_launch(A_U8(0), r[0], r[1], (UBYTE)r[2]); break; }
+        case 0x81: hw_projectile_load_global(A_U8(0), (UBYTE)(A_U8(2) + A_U8(1))); break;
         // trig + actor-angle opcodes (P0)
         case 0x86: hw_actor_get_angle((uint16_t *)vm_resolve_ref(THIS, A_I16(0)), (int16_t *)vm_resolve_ref(THIS, A_I16(2))); break;
         case 0x89: vm_sin_scale(THIS, A_I16(0), A_I16(2), A_U8(4)); break;

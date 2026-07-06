@@ -41,4 +41,9 @@ inline const GbaActorSprite* gba_actor_sprite(int sceneIdx, int actorIdx) {
     }
     return nullptr;
 }
+// M10f: projectile sprite lookup (none in the committed baseline).
+inline const GbaActorSprite* gba_projectile_sprite(int idx) {
+    (void)idx;
+    return nullptr;
+}
 #endif
