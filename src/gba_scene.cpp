@@ -69,6 +69,15 @@ void gba_load_scene(unsigned int idx)
         else hw_actor_place(ai.index, ai.x, ai.y, ai.dir);
         // Authored movement speed (M10a); 0 keeps the engine default.
         if(ai.move_speed) hw_actor_set_move_speed(ai.index, ai.move_speed);
+        // Authored collision group (M10f; the player row carries 0x01).
+        hw_actor_set_collision_group(ai.index, ai.collision_group);
+    }
+
+    // Preload the scene's projectile defs into the runtime slots (M10f) - GB
+    // data_manager parity, so Launch Projectile works with no load op.
+    for(unsigned int i = 0; i < s.projectiles_count; ++i)
+    {
+        hw_projectile_load_def((uint8_t)i, &s.projectiles[i]);
     }
 
     script_execute(0, s.init, nullptr, 0); // scene init: runs once (may reposition)
