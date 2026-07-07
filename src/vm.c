@@ -511,7 +511,8 @@ static const UBYTE vm_args_len[256] = {
     // M10c: SET_ANIM_SET ref,state. M10d: ACTOR_EMOTE ref,emote
     [0x3E]=3, [0x3F]=3, [0x40]=4, [0x41]=3, [0x42]=3,
     // M10e: SET_FLAGS ref,flags,mask; SET_COLL_ENABLED ref,on; MOVE_TO ref (blocking)
-    [0x44]=4, [0x45]=3, [0x46]=2,
+    // M10h: SET_SPRITESHEET ref,sheet
+    [0x44]=4, [0x45]=3, [0x46]=2, [0x47]=3,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // projectiles (M10f): LAUNCH slot,idx->{x,y,angle}; LOAD_TYPE dest,src,base
@@ -615,6 +616,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x42: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_emote((INT16)r[0], A_U8(2)); break; }
         case 0x44: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_flags((INT16)r[0], A_U8(2), A_U8(3)); break; }
         case 0x45: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_coll_enabled((INT16)r[0], A_U8(2)); break; }
+        case 0x47: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_spritesheet((INT16)r[0], A_U8(2)); break; }
         // M10e: single-op Move To - the ref block is {ID, X, Y, ATTR}; face the
         // dominant remaining axis, step both, rewind until arrival (like 0x38).
         case 0x46: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));

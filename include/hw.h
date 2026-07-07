@@ -73,6 +73,10 @@ void hw_actor_set_flags(int16_t id, uint8_t flags, uint8_t mask); // 0x44 GB act
 void hw_actor_set_coll_enabled(int16_t id, uint8_t enabled);      // 0x45 collision blocker on/off (M10e)
 // M10f: the actor's GB collision group bit (projectile hit matching; player = 0x01).
 void hw_actor_set_collision_group(int16_t id, uint8_t group);
+// M10h: swap the actor's spritesheet to global sprite `sheet` (0x47
+// VM_ACTOR_SET_SPRITESHEET; index into the generated gba_global_sprite table).
+// The actor keeps its position/facing/state; the animation restarts.
+void hw_actor_set_spritesheet(int16_t id, uint8_t sheet);
 // M10g: the script run when a projectile hits this actor (the actor's combined
 // interact/hit script; the scene's player-hit script for actor 0). The engine
 // passes the projectile's collision group as thread arg 0 so the script's

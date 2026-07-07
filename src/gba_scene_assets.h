@@ -41,8 +41,9 @@ inline const GbaActorSprite* gba_actor_sprite(int sceneIdx, int actorIdx) {
     }
     return nullptr;
 }
-// M10f: projectile sprite lookup (none in the committed baseline).
-inline const GbaActorSprite* gba_projectile_sprite(int idx) {
+// M10f/M10h: global sprite lookup - projectile defs and runtime spritesheet
+// swaps both index this table (none in the committed baseline).
+inline const GbaActorSprite* gba_global_sprite(int idx) {
     (void)idx;
     return nullptr;
 }
