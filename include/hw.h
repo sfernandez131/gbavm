@@ -102,6 +102,13 @@ void hw_camera_shake(int frames);
 // `preserve` (M4q): non-zero = VM_DISPLAY_TEXT_EX append (continue the existing box for
 // !W: wait chunks); 0 = a fresh display. Returns 1 once the text is fully revealed.
 int hw_text_step(const char* text, const int16_t* values, int n_values, int avatar, int preserve);
+// 0x48 VM_CHOICE (M11a): drive the choice/menu cursor one frame. `items` is the
+// COUNT x 6-byte .MENUITEM table {x, y, iL, iR, iU, iD} (tile coords + the
+// 1-based item the cursor moves to per direction, 0 = stay). `options` is the
+// .UI_MENU_* bitfield (1 = last item returns 0, 2 = B cancels to 0, 4 = start
+// at `start`). Returns -1 while the menu is open, else the result to store
+// (1-based selected item, or 0 for cancel/last). The VM blocks until then.
+int hw_choice_step(uint8_t options, uint8_t count, const unsigned char* items, int start);
 // VM_OVERLAY_WAIT (M4q): blocks until the requested UI conditions (window/text/button);
 // owns the dialogue A-wait. Returns 1 when satisfied, 0 to keep waiting.
 int hw_overlay_wait(int condition);
