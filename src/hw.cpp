@@ -255,6 +255,31 @@ namespace
     bn::fixed box_top = SCREEN_BOTTOM;           // current window top (y); 80 = hidden
     bn::fixed box_top_target = SCREEN_BOTTOM;    // target top the box slides toward
     int box_slide_px = OVERLAY_SLIDE_PX;         // this move's slide speed (px/frame)
+    // Horizontal geometry (M11c): the box WIDTH comes from VM_OVERLAY_CLEAR and its
+    // X from VM_OVERLAY_MOVE_TO, both in GB's 20-tile window space. Mapping onto the
+    // 30-tile GBA screen: a full-width GB box (x 0, w 20) stays full-width; a box
+    // touching GB's right edge (x + w >= 20, e.g. the "menu" layout at x 10, w 10)
+    // stays right-anchored; anything else is left-anchored at x tiles.
+    int box_move_x = 0;                          // VM_OVERLAY_MOVE_TO x (GB tiles)
+    int box_clear_w = 20;                        // VM_OVERLAY_CLEAR w (GB tiles)
+    int box_left = -HALF_W;                      // derived px bounds (see overlay_span)
+    int box_right = HALF_W;
+    void overlay_span()
+    {
+        if(box_move_x <= 0 && box_clear_w >= 20) { box_left = -HALF_W; box_right = HALF_W; }
+        else if(box_move_x + box_clear_w >= 20)
+        {
+            box_right = HALF_W;
+            box_left = HALF_W - box_clear_w * 8;
+        }
+        else
+        {
+            box_left = -HALF_W + box_move_x * 8;
+            box_right = box_left + box_clear_w * 8;
+        }
+        if(box_left < -HALF_W) box_left = -HALF_W;
+        if(box_right > HALF_W) box_right = HALF_W;
+    }
 
     // GBVM overlay row Y -> the box's target top edge in Butano screen y. The box
     // bottom is the screen bottom; (18 - y) rows * 8px tall, clamped to the screen.
@@ -664,10 +689,11 @@ void hw_player_update(void)
 
 void hw_overlay_move_to(int x, int y, int speed)
 {
-    // Non-blocking: set the box target; hw_overlay_update slides it there. The box is
-    // full-width at the bottom (x/width are ignored for the dialogue box for now).
-    (void)x;
+    // Non-blocking: set the box target; hw_overlay_update slides it there. The box
+    // X (GB window tiles) pairs with VM_OVERLAY_CLEAR's width (M11c).
     overlay_init();
+    box_move_x = x;
+    overlay_span();
     box_top_target = overlay_top_for_row(y);
     box_slide_px = (speed > 0) ? speed : OVERLAY_SLIDE_PX; // negatives are sentinels
     if(speed == -3) box_top = box_top_target;              // .OVERLAY_SPEED_INSTANT
@@ -689,6 +715,18 @@ void hw_overlay_show(int x, int y, int color)
     overlay_init();
     box_top_target = overlay_top_for_row(y);
     box_top = box_top_target;
+}
+
+// M11c VM_OVERLAY_CLEAR: latch the box width (GB window tiles). GB paints a w x h
+// rect; on GBA the panel is a clipped bg, so only the geometry matters - the X
+// comes from the paired VM_OVERLAY_MOVE_TO, the height from the text sizing.
+// COLOR and the frame/scroll options are accepted and ignored for now.
+void hw_overlay_clear(int x, int y, int w, int h, int color, int options)
+{
+    (void)x; (void)y; (void)h; (void)color; (void)options;
+    overlay_init();
+    box_clear_w = (w > 0) ? w : 20;
+    overlay_span();
 }
 
 void hw_overlay_hide(void)
@@ -797,13 +835,18 @@ void hw_overlay_update(void)
     const bool visible = box_top < SCREEN_BOTTOM;
     panel_bg->set_visible(visible);
     if(visible)
-        bn::rect_window::internal().set_boundaries(box_top, -HALF_W, SCREEN_BOTTOM, HALF_W);
+        bn::rect_window::internal().set_boundaries(box_top, box_left, SCREEN_BOTTOM, box_right);
     // The frame line's 2px stripe sits at the top of the 32px sprite, so centre it
     // box_top + 16 to cap the panel's top edge; the sprites track the slide.
-    for(bn::sprite_ptr& s : frame_sprites)
+    for(int i = 0; i < frame_sprites.size(); ++i)
     {
-        s.set_visible(visible);
-        if(visible) s.set_y(box_top + 16);
+        bn::sprite_ptr& s = frame_sprites[i];
+        // Show only the segments overlapping the box span (M11c) - a right-side
+        // menu box keeps its top line roughly capped, not full-width.
+        const int cx = FRAME_SEG_X[i];
+        const bool seg_visible = visible && (cx + 32 > box_left) && (cx - 32 < box_right);
+        s.set_visible(seg_visible);
+        if(seg_visible) s.set_y(box_top + 16);
     }
 }
 
@@ -866,12 +909,12 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
             {
                 avatar_sprite = av->create_sprite(AVATAR_X, AVATAR_Y);
                 avatar_sprite->set_bg_priority(1); // in front of the panel, like the text
-                text_x = TEXT_X + AVATAR_TEXT_SHIFT;
+                text_x = box_left + 8 + AVATAR_TEXT_SHIFT; // 1-tile pad from the box edge (M11c)
             }
             else
             {
                 avatar_sprite.reset();
-                text_x = TEXT_X;
+                text_x = box_left + 8; // 1-tile pad from the box edge (M11c)
             }
             // Size the box to fit this text (TEXT_LINE_H pitch keeps it tall enough for
             // the avatar); the script's overlay slide still controls show/hide.
