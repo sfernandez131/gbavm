@@ -160,6 +160,33 @@ namespace
         return n;
     }
 
+    // Visible line count (M11b): \n advances the line and a goto code (\003 x y)
+    // JUMPS to row y-2, but only rows where glyphs actually land count - so a
+    // two-column menu (a \n straight into a goto back to the top row) measures
+    // its visual height, not its \n count.
+    int count_text_lines(const char* buf, int len)
+    {
+        int cur = 0, maxl = 0;
+        for(int i = 0; i < len; ++i)
+        {
+            const char ch = buf[i];
+            if(ch == 0x01 || ch == 0x02) { ++i; continue; } // skip code + 1 param
+            if(ch == 0x03)                                   // goto x,y: jump rows
+            {
+                if(i + 2 < len)
+                {
+                    const int py = (uint8_t)buf[i + 2] - 2;
+                    cur = py < 0 ? 0 : py;
+                }
+                i += 2;
+                continue;
+            }
+            if(ch == '\n') { ++cur; continue; }
+            if((uint8_t)ch >= 0x20 && (uint8_t)ch <= 0x7e && cur > maxl) maxl = cur;
+        }
+        return maxl + 1;
+    }
+
     // Consume any \001 set-speed codes at the reveal cursor (each is the code byte +
     // a param byte), applying the new rate. Control codes are instant (no reveal tick)
     // and are skipped when rendering glyphs, so the cursor steps past them here.
@@ -814,9 +841,9 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
             // chunk carries its own %d values; resume revealing from where we stopped.
             int lines = text_lines;
             text_len = subst_text(text, values, n_values, text_len, &lines);
-            text_lines = lines;
+            text_lines = count_text_lines(text_buf, text_len); // goto-aware (M11b)
             text_rendered = -1;
-            box_top_target = SCREEN_BOTTOM - (lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
+            box_top_target = SCREEN_BOTTOM - (text_lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
         }
         else
         {
@@ -824,7 +851,7 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
             // portrait, and size the box. Speed/font codes are copied verbatim.
             int lines = 1;
             text_len = subst_text(text, values, n_values, 0, &lines);
-            text_lines = lines;
+            text_lines = count_text_lines(text_buf, text_len); // goto-aware (M11b)
             text_revealed = 0;
             reveal_timer = 0;
             reveal_frames = REVEAL_FRAMES;   // default until a \001 speed code changes it
@@ -849,7 +876,7 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
             // Size the box to fit this text (TEXT_LINE_H pitch keeps it tall enough for
             // the avatar); the script's overlay slide still controls show/hide.
             overlay_init();
-            box_top_target = SCREEN_BOTTOM - (lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
+            box_top_target = SCREEN_BOTTOM - (text_lines * TEXT_LINE_H + TEXT_TOP_PAD + TEXT_BOTTOM_MARGIN);
         }
     }
     const bool was_revealed = (text_revealed >= text_len); // already done on a prior frame?
@@ -887,7 +914,9 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
         // aligned (the box is sized taller for more lines). \002 switches font and the
         // x advances by each run's width; \n starts a new line (font persists). The
         // dialogue starts in the default font (index 0).
-        int y = SCREEN_BOTTOM - text_lines * TEXT_LINE_H - TEXT_BOTTOM_MARGIN + TEXT_LINE_OFFSET;
+        const int line0_y =
+            SCREEN_BOTTOM - text_lines * TEXT_LINE_H - TEXT_BOTTOM_MARGIN + TEXT_LINE_OFFSET;
+        int y = line0_y;
         int x = text_x;
         int font_idx = 0;
         char run[sizeof(text_buf)];
@@ -905,13 +934,16 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
                 if(font_idx < 0 || font_idx >= gba_dialogue_font_count) font_idx = 0;
                 ++i; // skip the param byte
             }
-            else if(ch == 0x03) // goto x,y (M11a): indent the line to tile x; the
-            {                   // y param rides on the \n line breaks instead
+            else if(ch == 0x03) // goto x,y (M11a/M11b): jump to tile column x, row y
+            {
                 run[r] = '\0';
                 if(r > 0) x += render_text_run(font_idx, x, y, run);
                 r = 0;
                 const int px = shown[i + 1] ? (uint8_t)shown[i + 1] : 1;
+                const int py = shown[i + 2] ? (uint8_t)shown[i + 2] : 2;
                 x = text_x + (px - 1) * 8;
+                const int line = py - 2 < 0 ? 0 : py - 2; // window row 2 = line 0
+                y = line0_y + line * TEXT_LINE_H;
                 i += 2; // skip both param bytes
             }
             else if(ch == '\n' || ch == '\0')
