@@ -166,8 +166,14 @@ namespace
     void consume_text_codes()
     {
         while(text_revealed < text_len &&
-              (text_buf[text_revealed] == 0x01 || text_buf[text_revealed] == 0x02))
+              (text_buf[text_revealed] == 0x01 || text_buf[text_revealed] == 0x02 ||
+               text_buf[text_revealed] == 0x03))
         {
+            if(text_buf[text_revealed] == 0x03) // goto x,y: layout only (code + 2 params)
+            {
+                text_revealed += 3;
+                continue;
+            }
             if(text_buf[text_revealed] == 0x01) // set-speed: apply the new rate
             {
                 const int param = (text_revealed + 1 < text_len)
@@ -255,6 +261,27 @@ namespace
     }
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
+
+    // Choice / menu cursor state (M11a, VM_CHOICE). The menu text is a normal
+    // dialogue (already displayed + revealed by the time VM_CHOICE runs); this
+    // adds the cursor glyph and the item-graph navigation.
+    bool choice_active = false;
+    int choice_index = 0;                        // 0-based selected item
+    bn::vector<bn::sprite_ptr, 2> choice_cursor; // the ">" glyph sprite(s)
+
+    // Place the cursor glyph at a menu item's tile coords: x/y are GB window
+    // tiles (1-based); lines match the dialogue layout (TEXT_LINE_H pitch).
+    void choice_place_cursor(const unsigned char* item)
+    {
+        choice_cursor.clear();
+        const int cx = text_x + (item[0] - 1) * 8;
+        const int cy = SCREEN_BOTTOM - text_lines * TEXT_LINE_H - TEXT_BOTTOM_MARGIN +
+                       TEXT_LINE_OFFSET + (item[1] - 1) * TEXT_LINE_H;
+        bn::sprite_text_generator gen(gba_dialogue_font(0));
+        gen.set_left_alignment();
+        gen.set_bg_priority(1); // in front of the overlay panel, like the text
+        gen.generate(cx, cy, ">", choice_cursor);
+    }
 
     // Emote bubble state (M10d): one emote at a time, like the GB engine.
     constexpr int EMOTE_FRAMES = 60;             // ~1s on screen
@@ -639,6 +666,8 @@ void hw_overlay_show(int x, int y, int color)
 
 void hw_overlay_hide(void)
 {
+    choice_active = false; // a vanishing box takes any open menu with it (M11a)
+    choice_cursor.clear();
     // Snap the box off the bottom of the screen + clear its text (M4q).
     box_top_target = SCREEN_BOTTOM;
     box_top = SCREEN_BOTTOM;
@@ -875,6 +904,15 @@ int hw_text_step(const char* text, const int16_t* values, int n_values, int avat
                 font_idx = param - 1;
                 if(font_idx < 0 || font_idx >= gba_dialogue_font_count) font_idx = 0;
                 ++i; // skip the param byte
+            }
+            else if(ch == 0x03) // goto x,y (M11a): indent the line to tile x; the
+            {                   // y param rides on the \n line breaks instead
+                run[r] = '\0';
+                if(r > 0) x += render_text_run(font_idx, x, y, run);
+                r = 0;
+                const int px = shown[i + 1] ? (uint8_t)shown[i + 1] : 1;
+                x = text_x + (px - 1) * 8;
+                i += 2; // skip both param bytes
             }
             else if(ch == '\n' || ch == '\0')
             {
@@ -1216,4 +1254,55 @@ void hw_projectile_launch(uint8_t slot, uint16_t x, uint16_t y, uint8_t angle)
     p->life = p->def.life_time > 0 ? p->def.life_time : 1;
     p->active = true;
     p->sprite.reset(); // created lazily on the next render
+}
+
+// --- choice / menu (M11a) -----------------------------------------------------
+
+// 0x48 VM_CHOICE: one frame of menu interaction. The menu text is already on
+// screen (a normal dialogue display precedes the op); this owns the cursor and
+// the item-graph navigation. GB parity: iL/iR/iU/iD are 1-based item numbers
+// (0 = the cursor stays); A selects (1-based result; the LAST item returns 0
+// under .UI_MENU_LAST_0), B returns 0 under .UI_MENU_CANCEL_B.
+int hw_choice_step(uint8_t options, uint8_t count, const unsigned char* items, int start)
+{
+    if(count == 0) return 0;
+    if(!choice_active)
+    {
+        choice_active = true;
+        choice_index = 0;
+        if(options & 0x04) // .UI_MENU_SET_START: the result var holds the initial item
+        {
+            const int s0 = start - 1; // 1-based in the variable
+            if(s0 >= 0 && s0 < (int)count) choice_index = s0;
+        }
+        choice_place_cursor(items + choice_index * 6);
+        return -1; // swallow the first frame so the A that opened the menu can't select
+    }
+
+    const unsigned char* it = items + choice_index * 6;
+    int next = choice_index;
+    if(bn::keypad::left_pressed()  && it[2]) next = it[2] - 1;
+    else if(bn::keypad::right_pressed() && it[3]) next = it[3] - 1;
+    else if(bn::keypad::up_pressed()    && it[4]) next = it[4] - 1;
+    else if(bn::keypad::down_pressed()  && it[5]) next = it[5] - 1;
+    if(next != choice_index && next >= 0 && next < (int)count)
+    {
+        choice_index = next;
+        choice_place_cursor(items + choice_index * 6);
+    }
+
+    if(bn::keypad::a_pressed())
+    {
+        const bool last_zero = (options & 0x01) && (choice_index == (int)count - 1);
+        choice_active = false;
+        choice_cursor.clear();
+        return last_zero ? 0 : choice_index + 1;
+    }
+    if((options & 0x02) && bn::keypad::b_pressed())
+    {
+        choice_active = false;
+        choice_cursor.clear();
+        return 0;
+    }
+    return -1;
 }

@@ -513,6 +513,9 @@ static const UBYTE vm_args_len[256] = {
     // M10e: SET_FLAGS ref,flags,mask; SET_COLL_ENABLED ref,on; MOVE_TO ref (blocking)
     // M10h: SET_SPRITESHEET ref,sheet
     [0x44]=4, [0x45]=3, [0x46]=2, [0x47]=3,
+    // M11a: CHOICE idx,options,count (+ a trailing count x 6-byte menu-item table
+    // the handler advances past itself)
+    [0x48]=4,
     // trig + actor-angle opcodes (P0): ACTOR_GET_ANGLE, SIN_SCALE, COS_SCALE
     [0x86]=4, [0x89]=5, [0x8A]=5,
     // projectiles (M10f): LAUNCH slot,idx->{x,y,angle}; LOAD_TYPE dest,src,base
@@ -617,6 +620,15 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x44: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_flags((INT16)r[0], A_U8(2), A_U8(3)); break; }
         case 0x45: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_coll_enabled((INT16)r[0], A_U8(2)); break; }
         case 0x47: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_spritesheet((INT16)r[0], A_U8(2)); break; }
+        // M11a VM_CHOICE: blocking menu. PC already points past the fixed args at
+        // the count x 6-byte .MENUITEM table; rewind + wait until a selection is
+        // made, then store the result and step over the table.
+        case 0x48: {
+            INT16 * dest = (INT16 *)vm_resolve_ref(THIS, A_I16(0));
+            int r = hw_choice_step(A_U8(2), A_U8(3), THIS->PC, (int)*dest);
+            if (r < 0) { THIS->PC -= (INSTRUCTION_SIZE + 4); THIS->waitable = TRUE; }
+            else { *dest = (INT16)r; THIS->PC += 6 * A_U8(3); }
+            break; }
         // M10e: single-op Move To - the ref block is {ID, X, Y, ATTR}; face the
         // dominant remaining axis, step both, rewind until arrival (like 0x38).
         case 0x46: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));
