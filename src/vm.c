@@ -530,8 +530,8 @@ static const UBYTE vm_args_len[256] = {
     // dialogue text (M4): VM_DISPLAY_TEXT/_EX carry their text inline (variable length)
     [0x90]=0, [0x95]=0,
     // dialogue overlay window box (M4d): MOVE_TO x,y,speed; SHOW x,y,color,options; HIDE
-    // M4q: OVERLAY_WAIT modal,condition
-    [0x91]=3, [0x92]=4, [0x93]=0, [0x94]=2,
+    // M4q: OVERLAY_WAIT modal,condition. M11c: CLEAR x,y,w,h,color,options
+    [0x91]=3, [0x92]=4, [0x93]=0, [0x94]=2, [0x96]=6,
     // timers (M6f): PREPARE ctx,bank,addr(ptr); SET ctx,interval; STOP ctx; RESET ctx
     [0x70]=6, [0x71]=2, [0x72]=1, [0x73]=1,
 };
@@ -688,6 +688,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x91: hw_overlay_move_to(A_U8(0), A_U8(1), A_I8(2)); break;
         case 0x92: hw_overlay_show(A_U8(0), A_U8(1), A_U8(2)); break;
         case 0x93: hw_overlay_hide(); break;
+        case 0x96: hw_overlay_clear(A_U8(0), A_U8(1), A_U8(2), A_U8(3), A_U8(4), A_U8(5)); break;
         case 0x94: if (!hw_overlay_wait(A_U8(1))) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; } break;
         // Timers (M6f): PREPARE stores a slot's script; SET arms it to fire every `interval`
         // ticks; STOP disables it; RESET restarts the countdown. timers_update() fires them.
