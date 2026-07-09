@@ -1,0 +1,61 @@
+# gbavm quality gate (GBA_STUDIO_ROADMAP.md "quality program part 2").
+# The engine must always build STANDALONE from its committed baseline generated
+# files (gba_program.c / gba_scenes.c / gba_scene_assets.h / ...) - the invariant
+# every editor slice hand-restores before committing. This job enforces it on a
+# clean runner with the same Wonderful Toolchain recipe as gba-studio's
+# gba-integration job.
+name: Engine CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  standalone-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gbavm
+
+      - name: Clone Butano (side-by-side, the Makefile's ../butano layout)
+        run: git clone --depth 1 --branch 21.7.0 https://github.com/GValiente/butano.git butano
+
+      - name: Install Wonderful Toolchain (target-gba + blocksds tools)
+        run: |
+          sudo mkdir -p /opt/wonderful
+          sudo chown "$(id -u):$(id -g)" /opt/wonderful
+          curl -sL https://wonderful.asie.pl/bootstrap/wf-bootstrap-x86_64.tar.gz \
+            | tar xz -C /opt/wonderful
+          export WONDERFUL_TOOLCHAIN=/opt/wonderful
+          export PATH=/opt/wonderful/bin:$PATH
+          # First -Syu only upgrades wf-pacman itself; run twice per WT docs.
+          wf-pacman -Syu --noconfirm wf-tools
+          wf-pacman -Syu --noconfirm wf-tools
+          wf-config repo enable blocksds
+          wf-pacman -Syu --noconfirm
+          wf-pacman -S --noconfirm target-gba blocksds-toolchain
+
+      - name: Provide python for Butano's asset tools
+        run: sudo apt-get -y install python-is-python3
+
+      - name: Build the engine standalone
+        env:
+          WONDERFUL_TOOLCHAIN: /opt/wonderful
+        run: |
+          export PATH=/opt/wonderful/bin:$PATH
+          make -C gbavm -j4
+
+      - name: Assert ROM + audio backend linked
+        run: |
+          ls -la gbavm/gbavm.gba
+          size=$(stat -c%s gbavm/gbavm.gba)
+          echo "engine ROM size: $size"
+          # The baseline fixture build is ~166KB; a build that silently dropped
+          # the audio backend (the M5/M6 stale-cache bug class) is far smaller.
+          test "$size" -ge 120000
+          # The Maxmod mixer must be in the link map (audio actually linked).
+          grep -q "mixer_asm" gbavm/build/gbavm.map
