@@ -119,9 +119,11 @@ int hw_overlay_wait(int condition);
 // These set the box target only (non-blocking); hw_overlay_update animates the slide.
 void hw_overlay_move_to(int x, int y, int speed); // 0x91  speed: -1 in, -2 out, -3 instant
 // 0x96 VM_OVERLAY_CLEAR (M11c): latch the box width (GB window tiles); x comes
-// from move_to and the height from the text. Color/options ignored for now.
+// from move_to and the height from the text. M11d: color picks the panel fill
+// (.UI_COLOR_WHITE = standard panel, .UI_COLOR_BLACK = true black) and options
+// bit 0 (.UI_DRAW_FRAME) shows the top-border line.
 void hw_overlay_clear(int x, int y, int w, int h, int color, int options);
-void hw_overlay_show(int x, int y, int color);    // 0x92  show the box at row y (instant)
+void hw_overlay_show(int x, int y, int color, int options); // 0x92  show the box at (x,y) (instant)
 void hw_overlay_hide(void);                        // 0x93  hide the box (instant)
 
 // --- DMG music (M5a) + sound effects (M5b) ---

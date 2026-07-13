@@ -686,7 +686,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // slides via hw_overlay_update each frame). VM_OVERLAY_WAIT (M4q) blocks until its
         // UI conditions; this is where dialogue waits for A.
         case 0x91: hw_overlay_move_to(A_U8(0), A_U8(1), A_I8(2)); break;
-        case 0x92: hw_overlay_show(A_U8(0), A_U8(1), A_U8(2)); break;
+        case 0x92: hw_overlay_show(A_U8(0), A_U8(1), A_U8(2), A_U8(3)); break;
         case 0x93: hw_overlay_hide(); break;
         case 0x96: hw_overlay_clear(A_U8(0), A_U8(1), A_U8(2), A_U8(3), A_U8(4), A_U8(5)); break;
         case 0x94: if (!hw_overlay_wait(A_U8(1))) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; } break;
