@@ -20,6 +20,7 @@
 #include "bn_sprite_tiles_item.h"
 #include "bn_regular_bg_ptr.h"
 #include "bn_bg_palettes.h"
+#include "bn_bg_palette_ptr.h" // panel recolour for .UI_COLOR_BLACK (M11d)
 #include "bn_sprite_palettes.h"
 #include "bn_camera_ptr.h"
 #include "bn_sprite_text_generator.h"
@@ -264,6 +265,20 @@ namespace
     int box_clear_w = 20;                        // VM_OVERLAY_CLEAR w (GB tiles)
     int box_left = -HALF_W;                      // derived px bounds (see overlay_span)
     int box_right = HALF_W;
+    // M11d box colour + frame option: VM_OVERLAY_CLEAR/SHOW's color picks the panel
+    // fill (.UI_COLOR_WHITE = the standard panel colour, .UI_COLOR_BLACK = true
+    // black - GB Studio's "Show Overlay" black screen cover) and .UI_DRAW_FRAME
+    // (options bit 0) shows the top-border line. Like GB, the latch persists until
+    // the next clear (every dialogue/menu emits one, so text boxes reset per use).
+    bool box_frame = true;                       // draw the top-border line sprites
+    bn::color panel_color;                       // the panel asset's authored colour
+    void panel_set_black(bool black)
+    {
+        // The panel bmp is a solid fill of palette index 1; recolour it in place
+        // (bg_palette_ptr is a shared handle - a copy mutates the same palette).
+        bn::bg_palette_ptr pal = panel_bg->palette();
+        pal.set_color(1, black ? bn::color(0, 0, 0) : panel_color);
+    }
     void overlay_span()
     {
         if(box_move_x <= 0 && box_clear_w >= 20) { box_left = -HALF_W; box_right = HALF_W; }
@@ -300,6 +315,7 @@ namespace
         panel_bg = bn::regular_bg_items::dialogue_panel.create_bg(0, 0);
         panel_bg->set_priority(2);               // scene bg = 3, text sprites = bg_priority 1
         panel_bg->set_visible(false);
+        panel_color = panel_bg->palette().colors()[1]; // authored fill (M11d restore target)
         bn::window::outside().set_show_bg(*panel_bg, false); // panel only inside the box rect
         // The top-border line sprites: priority 1 (in front of the panel), hidden until shown.
         for(int i = 0; i < 4; ++i)
@@ -708,25 +724,33 @@ void hw_overlay_move_to(int x, int y, int speed)
     }
 }
 
-void hw_overlay_show(int x, int y, int color)
+void hw_overlay_show(int x, int y, int color, int options)
 {
-    // Show the box at row y immediately (used by menus/choices; colour ignored for now).
-    (void)x; (void)color;
+    // Show the box at (x, y) immediately. GB clears the whole visible window area
+    // ((20-x) x (18-y)) in COLOR with no frame unless requested - the compiler's
+    // "Show Overlay" event always passes options 0 (black = full-screen cover).
     overlay_init();
+    box_move_x = x;
+    box_clear_w = 20 - x;
+    overlay_span();
     box_top_target = overlay_top_for_row(y);
     box_top = box_top_target;
+    box_frame = (options & 0x01) != 0;           // .UI_DRAW_FRAME
+    panel_set_black(color == 0);                 // .UI_COLOR_BLACK
 }
 
 // M11c VM_OVERLAY_CLEAR: latch the box width (GB window tiles). GB paints a w x h
 // rect; on GBA the panel is a clipped bg, so only the geometry matters - the X
 // comes from the paired VM_OVERLAY_MOVE_TO, the height from the text sizing.
-// COLOR and the frame/scroll options are accepted and ignored for now.
+// M11d: COLOR picks the panel fill and options bit 0 (.UI_DRAW_FRAME) the border.
 void hw_overlay_clear(int x, int y, int w, int h, int color, int options)
 {
-    (void)x; (void)y; (void)h; (void)color; (void)options;
+    (void)x; (void)y; (void)h;
     overlay_init();
     box_clear_w = (w > 0) ? w : 20;
     overlay_span();
+    box_frame = (options & 0x01) != 0;           // .UI_DRAW_FRAME
+    panel_set_black(color == 0);                 // .UI_COLOR_BLACK
 }
 
 void hw_overlay_hide(void)
@@ -844,7 +868,8 @@ void hw_overlay_update(void)
         // Show only the segments overlapping the box span (M11c) - a right-side
         // menu box keeps its top line roughly capped, not full-width.
         const int cx = FRAME_SEG_X[i];
-        const bool seg_visible = visible && (cx + 32 > box_left) && (cx - 32 < box_right);
+        const bool seg_visible = visible && box_frame &&
+                                 (cx + 32 > box_left) && (cx - 32 < box_right);
         s.set_visible(seg_visible);
         if(seg_visible) s.set_y(box_top + 16);
     }
