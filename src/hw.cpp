@@ -21,6 +21,7 @@
 #include "bn_regular_bg_ptr.h"
 #include "bn_bg_palettes.h"
 #include "bn_bg_palette_ptr.h" // panel recolour for .UI_COLOR_BLACK (M11d)
+#include "bn_sprite_palette_ptr.h" // sprite bank recolour for VM_LOAD_PALETTE (M12d)
 #include "bn_sprite_palettes.h"
 #include "bn_camera_ptr.h"
 #include "bn_sprite_text_generator.h"
@@ -438,6 +439,23 @@ void hw_init(void)
     *reinterpret_cast<volatile uint16_t*>(0x04000084) |= 0x0080;
 }
 
+// M12d: sprite palette latches. VM_LOAD_PALETTE .PALETTE_SPRITE can run before
+// an actor's sprite exists (scene init - sprites are created lazily on first
+// render), so each slot's last-set colours are latched and applied when a
+// matching sprite comes alive. Cleared on scene load (GB reloads palettes).
+namespace
+{
+    bn::color sprite_pal_latch[8][4];
+    bool sprite_pal_set[8] = { false, false, false, false,
+                               false, false, false, false };
+    void apply_sprite_latch(bn::sprite_ptr& s, int slot)
+    {
+        if(slot < 0 || slot > 7 || !sprite_pal_set[slot]) return;
+        bn::sprite_palette_ptr sp = s.palette();
+        for(int c = 1; c < 4; ++c) sp.set_color(c, sprite_pal_latch[slot][c]);
+    }
+}
+
 void hw_load_scene(int scene_idx, int width_px, int height_px)
 {
     // Swap in this scene's background and clear actors carried from a previous scene;
@@ -451,6 +469,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     scene_bg = gba_create_scene_bg(scene_idx);
     scene_bg->set_camera(*camera);
     hw_overlay_hide(); // clear any dialogue box carried from the previous scene
+    for(int i = 0; i < 8; ++i) sprite_pal_set[i] = false; // palettes reload per scene (M12d)
     emote_sprite.reset(); // drop any emote bubble from the previous scene (M10d)
     emote_timer = 0;
     emote_actor = -1;
@@ -521,6 +540,7 @@ void hw_render(void)
                 a.sprite = item ? item->create_sprite(0, 0)
                                 : bn::sprite_items::hero.create_sprite(0, 0);
                 if(camera) a.sprite->set_camera(*camera);
+                if(item && def) apply_sprite_latch(*a.sprite, def->pal_slot); // M12d
             }
             if(item)
             {
@@ -761,22 +781,45 @@ void hw_overlay_clear(int x, int y, int w, int h, int color, int options)
 // way, so the stream stays in sync.
 void hw_load_palette(int mask, int options, const unsigned char* rows)
 {
-    if(!(options & 0x02)) return;            // .PALETTE_BKG only for now
-    if(!scene_bg) return;
-    bn::bg_palette_ptr pal = scene_bg->palette();
-    if(pal.colors_count() < 128) return;     // not a banked (colour) background
     int row = 0;
     for(int b = 0; b < 8; ++b)
     {
         if(!(mask & (1 << b))) continue;
         const unsigned char* p = rows + row * 8;
+        ++row;
+        bn::color colors[4];
         for(int c = 0; c < 4; ++c)
         {
             const int v = p[c * 2] | (p[c * 2 + 1] << 8);
-            pal.set_color(b * 16 + 1 + c,
-                          bn::color(v & 31, (v >> 5) & 31, (v >> 10) & 31));
+            colors[c] = bn::color(v & 31, (v >> 5) & 31, (v >> 10) & 31);
         }
-        ++row;
+        if((options & 0x02) && scene_bg)     // .PALETTE_BKG
+        {
+            bn::bg_palette_ptr pal = scene_bg->palette();
+            if(pal.colors_count() >= 128)    // banked (colour) background only
+                for(int c = 0; c < 4; ++c)
+                    pal.set_color(b * 16 + 1 + c, colors[c]);
+        }
+        if(options & 0x04)                   // .PALETTE_SPRITE (M12d)
+        {
+            for(int c = 0; c < 4; ++c) sprite_pal_latch[b][c] = colors[c];
+            sprite_pal_set[b] = true;
+            // Recolor every live actor whose sheet was baked with this GBC OBJ
+            // slot (eject stamps GbaActorSprite.pal_slot). Colours 1..3 only -
+            // index 0 is transparent. Shared bn palettes mean identical sheets
+            // recolor together, which matches GBC slot semantics.
+            for(int i = 0; i < MAX_ACTORS; ++i)
+            {
+                Actor& a = actors[i];
+                if(!a.active || !a.sprite) continue;
+                const GbaActorSprite* def = (a.sprite_sheet >= 0)
+                    ? gba_global_sprite(a.sprite_sheet)
+                    : gba_actor_sprite(current_scene, i);
+                if(!def || def->pal_slot != b) continue;
+                bn::sprite_palette_ptr sp = a.sprite->palette();
+                for(int c = 1; c < 4; ++c) sp.set_color(c, colors[c]);
+            }
+        }
     }
 }
 
