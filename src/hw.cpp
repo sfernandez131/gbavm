@@ -753,6 +753,33 @@ void hw_overlay_clear(int x, int y, int w, int h, int color, int options)
     panel_set_black(color == 0);                 // .UI_COLOR_BLACK
 }
 
+// M12c VM_LOAD_PALETTE: recolor the scene bg's GBC palette banks in place. The
+// eject lays bank b's four colours at palette indices b*16+1..4 (M12a) and pads
+// the palette item to 128 entries so every bank is addressable at runtime; a
+// non-banked (mono) scene bg reports fewer colours and the op no-ops. Sprite
+// palettes (.PALETTE_SPRITE) are M12d - rows are still consumed by the VM either
+// way, so the stream stays in sync.
+void hw_load_palette(int mask, int options, const unsigned char* rows)
+{
+    if(!(options & 0x02)) return;            // .PALETTE_BKG only for now
+    if(!scene_bg) return;
+    bn::bg_palette_ptr pal = scene_bg->palette();
+    if(pal.colors_count() < 128) return;     // not a banked (colour) background
+    int row = 0;
+    for(int b = 0; b < 8; ++b)
+    {
+        if(!(mask & (1 << b))) continue;
+        const unsigned char* p = rows + row * 8;
+        for(int c = 0; c < 4; ++c)
+        {
+            const int v = p[c * 2] | (p[c * 2 + 1] << 8);
+            pal.set_color(b * 16 + 1 + c,
+                          bn::color(v & 31, (v >> 5) & 31, (v >> 10) & 31));
+        }
+        ++row;
+    }
+}
+
 void hw_overlay_hide(void)
 {
     choice_active = false; // a vanishing box takes any open menu with it (M11a)

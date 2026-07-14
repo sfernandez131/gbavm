@@ -126,6 +126,11 @@ void hw_overlay_clear(int x, int y, int w, int h, int color, int options);
 void hw_overlay_show(int x, int y, int color, int options); // 0x92  show the box at (x,y) (instant)
 void hw_overlay_hide(void);                        // 0x93  hide the box (instant)
 
+// 0x7C VM_LOAD_PALETTE (M12c): apply inline palette rows (one 8-byte row of four
+// RGB555 words per set mask bit) to the scene bg's GBC palette banks. Options
+// bit1 = .PALETTE_BKG (sprite palettes: M12d); no-ops on non-banked (mono) bgs.
+void hw_load_palette(int mask, int options, const unsigned char* rows);
+
 // --- DMG music (M5a) + sound effects (M5b) ---
 void hw_music_play(int track, int loop);           // 0x60  play DMG track (loop != 0 = loop)
 void hw_music_stop(void);                          // 0x61  stop DMG music
