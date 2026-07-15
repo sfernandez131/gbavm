@@ -272,9 +272,12 @@ namespace
     // (options bit 0) shows the top-border line. Like GB, the latch persists until
     // the next clear (every dialogue/menu emits one, so text boxes reset per use).
     bool box_frame = true;                       // draw the top-border line sprites
-    bn::color panel_color;                       // the panel asset's authored colour
+    bn::color panel_color;                       // the panel fill (authored or UI-palette)
+    bool panel_color_overridden = false;         // M12d2: Set UI Palette replaced it
+    bool panel_black_now = false;                // current fill is the black cover
     void panel_set_black(bool black)
     {
+        panel_black_now = black;
         // The panel bmp is a solid fill of palette index 1; recolour it in place
         // (bg_palette_ptr is a shared handle - a copy mutates the same palette).
         bn::bg_palette_ptr pal = panel_bg->palette();
@@ -316,7 +319,8 @@ namespace
         panel_bg = bn::regular_bg_items::dialogue_panel.create_bg(0, 0);
         panel_bg->set_priority(2);               // scene bg = 3, text sprites = bg_priority 1
         panel_bg->set_visible(false);
-        panel_color = panel_bg->palette().colors()[1]; // authored fill (M11d restore target)
+        if(!panel_color_overridden)                     // M12d2: UI palette may pre-set it
+            panel_color = panel_bg->palette().colors()[1]; // authored fill (M11d restore)
         bn::window::outside().set_show_bg(*panel_bg, false); // panel only inside the box rect
         // The top-border line sprites: priority 1 (in front of the panel), hidden until shown.
         for(int i = 0; i < 4; ++i)
@@ -799,6 +803,16 @@ void hw_load_palette(int mask, int options, const unsigned char* rows)
             if(pal.colors_count() >= 128)    // banked (colour) background only
                 for(int c = 0; c < 4; ++c)
                     pal.set_color(b * 16 + 1 + c, colors[c]);
+            // M12d2: bank 7 is GB's UI palette (Set UI Palette emits mask 128).
+            // The GBA dialogue style is inverted (light text on a dark panel),
+            // so the panel takes the palette's DARKEST colour. Latched so a
+            // pre-dialogue event survives the panel's lazy creation.
+            if(b == 7)
+            {
+                panel_color = colors[3];
+                panel_color_overridden = true;
+                if(overlay_inited && !panel_black_now) panel_set_black(false);
+            }
         }
         if(options & 0x04)                   // .PALETTE_SPRITE (M12d)
         {
