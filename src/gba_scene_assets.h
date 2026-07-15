@@ -13,6 +13,9 @@ struct GbaActorSprite {
     const bn::sprite_item* item;
     const unsigned char* anim_start; // [GBA_ANIM_STATES][8]
     const unsigned char* anim_len;
+    // M12d: the GBC OBJ palette slot the sheet was baked with (VM_LOAD_PALETTE
+    // .PALETTE_SPRITE recolors matching actors). Rows without it default to 0.
+    unsigned char pal_slot;
 };
 static const unsigned char scene0_sprite_1_anim_start[] = { 0, 1, 2, 3, 4, 6, 8, 10 };
 static const unsigned char scene0_sprite_1_anim_len[] = { 1, 1, 1, 1, 2, 2, 2, 2 };
