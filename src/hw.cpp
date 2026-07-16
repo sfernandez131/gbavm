@@ -833,6 +833,12 @@ void hw_load_palette(int mask, int options, const unsigned char* rows)
                 bn::sprite_palette_ptr sp = a.sprite->palette();
                 for(int c = 1; c < 4; ++c) sp.set_color(c, colors[c]);
             }
+            // GB's Set Emote Palette rewrites OBJ slot 7 (M12e).
+            if(b == 7 && emote_sprite)
+            {
+                bn::sprite_palette_ptr sp = emote_sprite->palette();
+                for(int c = 1; c < 4; ++c) sp.set_color(c, colors[c]);
+            }
         }
     }
 }
@@ -1197,6 +1203,7 @@ void hw_actor_emote(int16_t id, uint8_t emote)
     if(!item) return;
     emote_sprite = item->create_sprite(0, 0);
     if(camera) emote_sprite->set_camera(*camera);
+    apply_sprite_latch(*emote_sprite, 7); // GB emotes ride OBJ slot 7 (M12e)
     emote_sprite->set_bg_priority(2); // in front of the scene bg (3)
     emote_timer = EMOTE_FRAMES;
     emote_actor = id;
