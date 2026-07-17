@@ -28,6 +28,7 @@ void hw_render(void);
 // Enable/disable built-in top-down player movement for the loaded scene (set by
 // gba_load_scene from the scene's player_move flag).
 void hw_set_player_move(uint8_t enabled);
+void hw_set_scene_type(uint8_t type); // M13a: GBA_SCENE_* controller dispatch
 // Set the loaded scene's collision grid (one byte/tile, row-major). Movement is
 // blocked into any tile whose low nibble is non-zero, and outside the grid bounds.
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);

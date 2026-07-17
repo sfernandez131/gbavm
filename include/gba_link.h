@@ -98,7 +98,20 @@ typedef struct GbaScene {
     // M10g: the scene's combined player-hit script (branches on the projectile's
     // collision group via GET_TLOCAL 0), run when a projectile hits actor 0. 0 = none.
     unsigned char * player_hit;
+    // M13a: the scene type - picks the player controller. Rows without it
+    // zero-init to TOPDOWN. player_move stays the "movement enabled" bit
+    // (0 for POINTNCLICK/LOGO); non-TOPDOWN movers use the top-down
+    // controller until their controllers land (PLATFORM = M13b).
+    unsigned char scene_type;
 } GbaScene;
+
+// GbaScene.scene_type values (M13a).
+#define GBA_SCENE_TOPDOWN     0
+#define GBA_SCENE_PLATFORM    1
+#define GBA_SCENE_ADVENTURE   2
+#define GBA_SCENE_SHMUP       3
+#define GBA_SCENE_POINTNCLICK 4
+#define GBA_SCENE_LOGO        5
 
 // Global projectile-def tables (M10f): every VM_PROJECTILE_LOAD_TYPE source table,
 // flattened into one array. The bridge resolves each `_global_projectiles_<n>`
