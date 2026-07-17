@@ -669,6 +669,33 @@ void hw_set_sprites_visible(uint8_t mode)
 // so the GDB stub and runtime tests can read it under LTO.
 uint8_t gba_current_scene_type = 0;
 
+// --- M13b: core platformer physics (GROUND/JUMP/FALL) --------------------
+// The plat_* tunables are GB Studio ENGINE FIELDS: initialized to GB's
+// engine.json defaults and overwritten by compiled engine-field writes via
+// M1b ram relocations, so scene-init values and runtime Engine Field Update
+// events both work. extern "C" + exported so the editor's linker can bind
+// relocs to them (and GDB can read them under LTO). Widths match GB
+// (WORD -> int16_t, UBYTE -> uint8_t).
+extern "C" {
+int16_t plat_walk_vel = 6400;         // max walk velocity (GB Q8.8-ish units)
+int16_t plat_walk_acc = 152;          // walk acceleration
+int16_t plat_turn_acc = 712;          // extra friction when reversing
+int16_t plat_dec = 208;               // ground deceleration
+int16_t plat_air_dec = 208;           // air deceleration
+int16_t plat_min_vel = 304;           // minimum applied velocity
+int16_t plat_jump_vel = 16384;        // initial jump velocity (upward)
+int16_t plat_jump_hold_vel = 0;       // extra per-frame boost while holding jump
+uint8_t plat_jump_hold_frames = 1;    // frames of hold boost
+int16_t plat_grav = 1792;             // gravity per frame
+int16_t plat_hold_grav = 512;         // gravity while rising and holding jump
+int16_t plat_max_fall_vel = 20000;    // terminal velocity
+// Player platform state, GB's enum order: 0 FALL, 1 GROUND, 2 JUMP.
+// Velocities exported alongside it for GDB / runtime-test integration checks.
+uint8_t plat_state = 0;
+int16_t plat_vel_x = 0;
+int16_t plat_vel_y = 0;
+}
+
 void hw_set_scene_type(uint8_t type)
 {
     gba_current_scene_type = type;
@@ -677,6 +704,144 @@ void hw_set_scene_type(uint8_t type)
 void hw_set_player_move(uint8_t enabled)
 {
     player_move_enabled = (enabled != 0);
+}
+
+namespace
+{
+    // M13b runtime state (velocities in GB Q8.8 units; positions in GBA 32/px
+    // subpixels). GB integrates VEL_TO_SUBPX(v) = (v>>8)<<1 GB-subpixels
+    // (16/px); GBA subpixels are 32/px, so the delta doubles: (v>>8)<<2.
+    uint8_t plat_hold_timer = 0;
+    inline int plat_delta_subpx(int v) { return (v >> 8) << 2; }
+    inline uint8_t coll_at_px(int px, int py)
+    {
+        if(!collisions) return 0;
+        const int tx = px >> 3, ty = py >> 3;
+        if(tx < 0 || ty < 0 || tx >= coll_w || ty >= coll_h) return 0;
+        return collisions[ty * coll_w + tx];
+    }
+
+    // GB platform.c core loop, states only (M13b): GROUND/JUMP/FALL with
+    // walk acc / turn friction / dec, jump + hold boost, gravity + hold
+    // gravity, max fall; land on COLLISION_TOP under the feet, head-bump on
+    // BOTTOM. Coyote/buffer/double-jump/run are M13d; one-ways from below and
+    // ladders are M13c (a TOP-only tile already behaves one-way here: rising
+    // passes it, falling lands).
+    void platform_update()
+    {
+        Actor& p = actors[0];
+        if(!p.active) return;
+
+        // Horizontal input (handle_horizontal_input parity).
+        const bool left = bn::keypad::left_held();
+        const bool right = bn::keypad::right_held();
+        if(left || right)
+        {
+            const int dir = right ? 1 : -1;
+            int v = plat_vel_x * dir;             // input-aligned velocity
+            if(v < 0)
+            {
+                v += plat_turn_acc;               // reversing: turn friction
+                if(v > 0) v = 0;
+            }
+            else if(v <= plat_walk_vel)
+            {
+                v += plat_walk_acc;
+                if(v < plat_min_vel) v = plat_min_vel;
+                if(v > plat_walk_vel) v = plat_walk_vel;
+            }
+            else v -= plat_dec;                   // above max: settle down
+            plat_vel_x = (int16_t)(v * dir);
+            p.dir = right ? 1 : 3;
+            p.moving = true;
+        }
+        else if(plat_vel_x != 0)
+        {
+            const int dec = (plat_state == 1) ? plat_dec : plat_air_dec;
+            if(plat_vel_x > 0) { plat_vel_x = (int16_t)(plat_vel_x - dec); if(plat_vel_x < 0) plat_vel_x = 0; }
+            else               { plat_vel_x = (int16_t)(plat_vel_x + dec); if(plat_vel_x > 0) plat_vel_x = 0; }
+            if(plat_vel_x != 0) p.moving = true;
+        }
+
+        // Body sample points: actor pos is the sprite centre in 32/px
+        // subpixels; the body spans ~16px, so feet = +8px, head = -8px.
+        const int cx_px = p.x >> 5;
+        const bool jump_held = bn::keypad::a_held();
+
+        if(plat_state == 1)                       // GROUND
+        {
+            if(bn::keypad::a_pressed())           // state_enter_jump parity
+            {
+                plat_state = 2;
+                plat_hold_timer = plat_jump_hold_frames;
+                if(-plat_jump_vel < plat_vel_y) plat_vel_y = (int16_t)-plat_jump_vel;
+            }
+            else if(!(coll_at_px(cx_px, (int)(p.y >> 5) + 8) & 0x01))
+            {
+                plat_state = 0;                   // walked off a ledge -> FALL
+            }
+        }
+        if(plat_state == 2)                       // JUMP: hold boost
+        {
+            if(plat_hold_timer != 0 && jump_held)
+            {
+                plat_vel_y = (int16_t)(plat_vel_y - plat_jump_hold_vel);
+                plat_hold_timer--;
+            }
+            else plat_hold_timer = 0;
+            if(plat_vel_y >= 0) plat_state = 0;   // apex -> FALL
+        }
+        if(plat_state != 1)                       // airborne gravity
+        {
+            const int g = (jump_held && plat_vel_y < 0) ? plat_hold_grav : plat_grav;
+            int vy = plat_vel_y + g;
+            if(vy > plat_max_fall_vel) vy = plat_max_fall_vel;
+            plat_vel_y = (int16_t)vy;
+        }
+
+        // Integrate + collide. Horizontal: blocked by the facing edge bit
+        // (moving right hits the target tile's LEFT face 0x04; moving left
+        // its RIGHT face 0x08), sampled at body centre and near the feet.
+        int nx = (int)p.x + plat_delta_subpx(plat_vel_x);
+        if(plat_vel_x != 0)
+        {
+            const int edge_px = (nx >> 5) + (plat_vel_x > 0 ? 8 : -8);
+            const uint8_t face = plat_vel_x > 0 ? 0x04 : 0x08;
+            const int body_py = (int)(p.y >> 5);
+            if((coll_at_px(edge_px, body_py) & face) ||
+               (coll_at_px(edge_px, body_py + 7) & face))
+            {
+                nx = (int)p.x;
+                plat_vel_x = 0;
+            }
+        }
+        if(nx < 0) nx = 0;
+        p.x = (uint16_t)nx;
+
+        int ny = (int)p.y + plat_delta_subpx(plat_vel_y);
+        if(plat_vel_y > 0)                        // falling: land on TOP faces
+        {
+            const int feet_px = (ny >> 5) + 8;
+            if(coll_at_px(cx_px, feet_px) & 0x01)
+            {
+                const int tile_top_px = (feet_px >> 3) << 3;
+                ny = (tile_top_px - 8) << 5;      // snap feet to the tile top
+                plat_vel_y = 0;
+                plat_state = 1;                   // land -> GROUND
+            }
+        }
+        else if(plat_vel_y < 0)                   // rising: bump on BOTTOM faces
+        {
+            const int head_px = (ny >> 5) - 8;
+            if(coll_at_px(cx_px, head_px) & 0x02)
+            {
+                ny = (int)p.y;
+                plat_vel_y = 0;
+            }
+        }
+        if(ny < 0) { ny = 0; if(plat_vel_y < 0) plat_vel_y = 0; }
+        p.y = (uint16_t)ny;
+    }
 }
 
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles)
@@ -726,14 +891,9 @@ void hw_player_update(void)
     // Built-in top-down control: move the player (actor 0) from the live d-pad.
     // Horizontal + vertical can combine (8-way); facing prefers the horizontal axis.
     if(!player_move_enabled) return;
-    // M13a dispatch skeleton: PLATFORM (M13b) and SHMUP/ADVENTURE (M13f) will
-    // branch here; until their controllers land, every moving type uses the
-    // top-down controller below.
-    switch(gba_current_scene_type)
-    {
-        case 1: /* GBA_SCENE_PLATFORM - M13b */ break;
-        default: break;
-    }
+    // M13a/b dispatch: PLATFORM runs its own physics; SHMUP/ADVENTURE (M13f)
+    // still use the top-down controller below.
+    if(gba_current_scene_type == 1) { platform_update(); return; }
     Actor& p = actors[0];
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.
