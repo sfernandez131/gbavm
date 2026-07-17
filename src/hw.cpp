@@ -665,6 +665,15 @@ void hw_set_sprites_visible(uint8_t mode)
     sprites_hidden = (mode != 0);
 }
 
+// M13a: the loaded scene's GBA_SCENE_* type. Exported (not anonymous-namespace)
+// so the GDB stub and runtime tests can read it under LTO.
+uint8_t gba_current_scene_type = 0;
+
+void hw_set_scene_type(uint8_t type)
+{
+    gba_current_scene_type = type;
+}
+
 void hw_set_player_move(uint8_t enabled)
 {
     player_move_enabled = (enabled != 0);
@@ -717,6 +726,14 @@ void hw_player_update(void)
     // Built-in top-down control: move the player (actor 0) from the live d-pad.
     // Horizontal + vertical can combine (8-way); facing prefers the horizontal axis.
     if(!player_move_enabled) return;
+    // M13a dispatch skeleton: PLATFORM (M13b) and SHMUP/ADVENTURE (M13f) will
+    // branch here; until their controllers land, every moving type uses the
+    // top-down controller below.
+    switch(gba_current_scene_type)
+    {
+        case 1: /* GBA_SCENE_PLATFORM - M13b */ break;
+        default: break;
+    }
     Actor& p = actors[0];
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.
