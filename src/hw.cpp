@@ -689,8 +689,10 @@ uint8_t plat_jump_hold_frames = 1;    // frames of hold boost
 int16_t plat_grav = 1792;             // gravity per frame
 int16_t plat_hold_grav = 512;         // gravity while rising and holding jump
 int16_t plat_max_fall_vel = 20000;    // terminal velocity
-// Player platform state, GB's enum order: 0 FALL, 1 GROUND, 2 JUMP.
-// Velocities exported alongside it for GDB / runtime-test integration checks.
+int16_t plat_climb_vel = 4000;        // ladder climb velocity (M13c)
+uint8_t plat_drop_through_active = 1; // one-way drop-through enabled (M13c)
+// Player platform state, GB's enum order: 0 FALL, 1 GROUND, 2 JUMP, (3 DASH,)
+// 4 LADDER. Velocities exported alongside it for GDB / runtime-test checks.
 uint8_t plat_state = 0;
 int16_t plat_vel_x = 0;
 int16_t plat_vel_y = 0;
@@ -712,6 +714,8 @@ namespace
     // subpixels). GB integrates VEL_TO_SUBPX(v) = (v>>8)<<1 GB-subpixels
     // (16/px); GBA subpixels are 32/px, so the delta doubles: (v>>8)<<2.
     uint8_t plat_hold_timer = 0;
+    uint8_t plat_drop_timer = 0;      // frames of suppressed TOP landings (drop-through)
+    bool plat_ladder_block_v = false; // must release up/down after grabbing a ladder
     inline int plat_delta_subpx(int v) { return (v >> 8) << 2; }
     inline uint8_t coll_at_px(int px, int py)
     {
@@ -719,6 +723,87 @@ namespace
         const int tx = px >> 3, ty = py >> 3;
         if(tx < 0 || ty < 0 || tx >= coll_w || ty >= coll_h) return 0;
         return collisions[ty * coll_w + tx];
+    }
+
+    // M13c ladders: grab with UP (ladder tile at the head) or DOWN (below the
+    // feet) from GROUND/FALL, snapping x to the ladder column's centre; climb
+    // with plat_climb_vel; exit by jumping (A), dropping (DOWN+A), stepping
+    // onto standable ground, or pressing left/right after releasing vertical
+    // input (GB's plat_ladder_block_v rule).
+    inline bool is_ladder(uint8_t t) { return (t & 0x10) != 0; }
+    void ladder_check(Actor& p)
+    {
+        if(plat_ladder_block_v)
+        {
+            if(!(bn::keypad::up_held() || bn::keypad::down_held()))
+                plat_ladder_block_v = false;
+            else return;
+        }
+        if(bn::keypad::a_held() && bn::keypad::down_held()) return; // falling off
+        const int cx_px = p.x >> 5;
+        if(bn::keypad::up_held())
+        {
+            const int head_py = (int)(p.y >> 5) - 7;
+            if(is_ladder(coll_at_px(cx_px, head_py)))
+            {
+                p.x = (uint16_t)(((((cx_px) >> 3) << 3) + 4) << 5); // snap to column centre
+                plat_state = 4;
+                plat_ladder_block_v = true;
+            }
+        }
+        else if(bn::keypad::down_held())
+        {
+            const int below_py = (int)(p.y >> 5) + 8;
+            if(is_ladder(coll_at_px(cx_px, below_py)))
+            {
+                p.x = (uint16_t)(((((cx_px) >> 3) << 3) + 4) << 5);
+                plat_state = 4;
+                plat_ladder_block_v = true;
+            }
+        }
+    }
+    void ladder_update(Actor& p)
+    {
+        plat_vel_x = 0;
+        plat_vel_y = 0;
+        if(bn::keypad::a_pressed())
+        {
+            if(bn::keypad::down_held()) { plat_state = 0; return; } // drop off
+            plat_state = 2;                                          // jump off
+            plat_hold_timer = plat_jump_hold_frames;
+            plat_vel_y = (int16_t)-plat_jump_vel;
+            return;
+        }
+        const int cx_px = p.x >> 5;
+        if(bn::keypad::up_held())
+        {
+            if(is_ladder(coll_at_px(cx_px, (int)(p.y >> 5) - 7)))
+                plat_vel_y = (int16_t)-plat_climb_vel;
+            else if(coll_at_px(cx_px, (int)(p.y >> 5) + 8) & 0x01)
+            {
+                plat_state = 1;                    // topped out onto ground
+                return;
+            }
+        }
+        else if(bn::keypad::down_held())
+        {
+            const uint8_t below = coll_at_px(cx_px, (int)(p.y >> 5) + 8);
+            if(is_ladder(below)) plat_vel_y = (int16_t)plat_climb_vel;
+            else if(below & 0x01) { plat_state = 1; return; } // stepped off the bottom
+        }
+        else if(!plat_ladder_block_v &&
+                (bn::keypad::left_held() || bn::keypad::right_held()))
+        {
+            plat_state = 0;                        // let go sideways
+            return;
+        }
+        if(plat_ladder_block_v &&
+           !(bn::keypad::up_held() || bn::keypad::down_held()))
+            plat_ladder_block_v = false;
+        int ny = (int)p.y + plat_delta_subpx(plat_vel_y);
+        if(ny < 0) ny = 0;
+        p.y = (uint16_t)ny;
+        p.moving = plat_vel_y != 0;
     }
 
     // GB platform.c core loop, states only (M13b): GROUND/JUMP/FALL with
@@ -731,6 +816,7 @@ namespace
     {
         Actor& p = actors[0];
         if(!p.active) return;
+        if(plat_state == 4) { ladder_update(p); return; }  // LADDER (M13c)
 
         // Horizontal input (handle_horizontal_input parity).
         const bool left = bn::keypad::left_held();
@@ -780,7 +866,20 @@ namespace
             {
                 plat_state = 0;                   // walked off a ledge -> FALL
             }
+            else if(plat_drop_through_active && bn::keypad::down_held())
+            {
+                // Drop-through (M13c, GB default DOWN-hold input): only falls
+                // through one-way tiles - TOP set but no other solid faces.
+                const uint8_t footing = coll_at_px(cx_px, (int)(p.y >> 5) + 8);
+                if((footing & 0x0f) == 0x01)
+                {
+                    plat_state = 0;
+                    plat_drop_timer = 6;          // suppress TOP landings briefly
+                }
+            }
         }
+        if(plat_state <= 1) ladder_check(p);      // grab from GROUND/FALL (M13c)
+        if(plat_state == 4) return;               // grabbed: climb next frame
         if(plat_state == 2)                       // JUMP: hold boost
         {
             if(plat_hold_timer != 0 && jump_held)
@@ -819,15 +918,23 @@ namespace
         p.x = (uint16_t)nx;
 
         int ny = (int)p.y + plat_delta_subpx(plat_vel_y);
-        if(plat_vel_y > 0)                        // falling: land on TOP faces
+        if(plat_drop_timer != 0) plat_drop_timer--;
+        if(plat_vel_y > 0 && plat_drop_timer == 0) // falling: land on TOP faces
         {
-            const int feet_px = (ny >> 5) + 8;
-            if(coll_at_px(cx_px, feet_px) & 0x01)
+            // Tunnel guard (M13c): terminal velocity moves ~10px/frame, more
+            // than a tile - sweep every row the feet cross, land on the first
+            // TOP face instead of only testing the destination row.
+            const int feet_from = ((int)(p.y >> 5) + 8) >> 3;
+            const int feet_to = ((ny >> 5) + 8) >> 3;
+            for(int ty = feet_from; ty <= feet_to; ++ty)
             {
-                const int tile_top_px = (feet_px >> 3) << 3;
-                ny = (tile_top_px - 8) << 5;      // snap feet to the tile top
-                plat_vel_y = 0;
-                plat_state = 1;                   // land -> GROUND
+                if(coll_at_px(cx_px, ty << 3) & 0x01)
+                {
+                    ny = ((ty << 3) - 8) << 5;    // snap feet to the tile top
+                    plat_vel_y = 0;
+                    plat_state = 1;               // land -> GROUND
+                    break;
+                }
             }
         }
         else if(plat_vel_y < 0)                   // rising: bump on BOTTOM faces
