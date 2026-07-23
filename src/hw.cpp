@@ -1807,6 +1807,11 @@ void hw_input_get(uint16_t* dst, uint8_t joyid)
     if(bn::keypad::b_held())      m |= 0x20;
     if(bn::keypad::select_held()) m |= 0x40;
     if(bn::keypad::start_held())  m |= 0x80;
+    // M8a: GBA-exclusive L/R shoulder buttons in the high byte (bits 8/9). GB
+    // has no L/R, so these are only referenced by GBA-gated editor input; the
+    // dst is a uint16 mask so they survive the read.
+    if(bn::keypad::l_held())      m |= 0x100;
+    if(bn::keypad::r_held())      m |= 0x200;
     *dst = m;
 }
 
