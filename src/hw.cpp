@@ -45,7 +45,13 @@
 
 namespace
 {
-    constexpr int MAX_ACTORS = 8;
+    // M8b: raise GB's tight actor cap. 12 active actors runs at a full 60fps
+    // alongside the fixture's dialogue text + projectile sprites; 14+ trips
+    // Butano's sprite budget (measured cliff, 60fps -> assert). Going higher
+    // needs sprite-VRAM budgeting (shared actor tiles / a bigger sprite pool),
+    // tracked in docs/M8_SUPERPOWERS_DESIGN.md. All actor loops use this
+    // constant, so the bump is otherwise clean.
+    constexpr int MAX_ACTORS = 12;
     constexpr int SUBPX = 32;            // GBVM actor position units per pixel (256 per 8px tile)
     constexpr int HALF_W = 120;          // half the 240x160 GBA screen
     constexpr int HALF_H = 80;
