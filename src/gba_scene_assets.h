@@ -4,6 +4,8 @@
 #ifndef GBA_SCENE_ASSETS_H
 #define GBA_SCENE_ASSETS_H
 #include "bn_regular_bg_ptr.h"
+#include "bn_affine_bg_ptr.h"
+#include "bn_optional.h"
 #include "bn_sprite_item.h"
 #include "bn_regular_bg_items_scene0_bg.h"
 #include "bn_regular_bg_items_scene1_bg.h"
@@ -49,5 +51,10 @@ inline const GbaActorSprite* gba_actor_sprite(int sceneIdx, int actorIdx) {
 inline const GbaActorSprite* gba_global_sprite(int idx) {
     (void)idx;
     return nullptr;
+}
+// M8d: affine scene bg. Baseline has none -> nullopt (loader keeps regular bg).
+inline bn::optional<bn::affine_bg_ptr> gba_create_scene_affine_bg(int sceneIdx) {
+    (void)sceneIdx;
+    return bn::optional<bn::affine_bg_ptr>();
 }
 #endif
