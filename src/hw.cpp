@@ -384,6 +384,14 @@ namespace
     int current_scene = 0;                       // index for per-scene sprite lookup
     int scene_w_px = 240;                        // scene logical size (for camera bounds)
     int scene_h_px = 160;
+    // M13f SHMUP scroll state: shmup_dir (player's initial facing: 0 down,
+    // 1 right, 2 up, 3 left) is the scroll direction; the camera auto-scrolls
+    // that way, dragging the player, until it hits the scene edge (shmup_end).
+    bool shmup_inited = false;
+    uint8_t shmup_dir = 0;
+    bool shmup_end = false;
+    bn::fixed shmup_cx = 0;
+    bn::fixed shmup_cy = 0;
     int shake_frames = 0;                        // camera shake (M6h): frames of shake left
     int shake_total = 0;                         // total shake length, for amplitude decay
 
@@ -474,6 +482,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     scene_bg->set_camera(*camera);
     hw_overlay_hide(); // clear any dialogue box carried from the previous scene
     for(int i = 0; i < 8; ++i) sprite_pal_set[i] = false; // palettes reload per scene (M12d)
+    shmup_inited = false; // SHMUP re-inits from the new player's facing (M13f)
     emote_sprite.reset(); // drop any emote bubble from the previous scene (M10d)
     emote_timer = 0;
     emote_actor = -1;
@@ -502,6 +511,8 @@ void hw_camera_shake(int frames)
     shake_total = frames;
 }
 
+extern uint8_t gba_current_scene_type; // defined below (M13a); used by the SHMUP camera
+
 void hw_render(void)
 {
     // Camera follows the lowest-index active actor (the player / first placed actor),
@@ -509,6 +520,12 @@ void hw_render(void)
     if(camera)
     {
         bn::fixed cx = 0, cy = 0;
+        if(gba_current_scene_type == 3 && shmup_inited)
+        {
+            cx = shmup_cx;                        // M13f: SHMUP auto-scroll camera
+            cy = shmup_cy;
+        }
+        else
         for(int i = 0; i < MAX_ACTORS; ++i)
         {
             if(actors[i].active)
@@ -708,6 +725,11 @@ int16_t plat_vel_y = 0;
 uint8_t plat_coyote_timer = 0;        // frames of coyote jump left (M13d)
 uint8_t plat_jump_buffer_timer = 0;   // frames of buffered jump left (M13d)
 uint8_t plat_extra_jumps_counter = 0; // air jumps left (M13d)
+// M13f SHMUP: auto-scroll speed (GB subpx/frame, 16/px - so 32 = 2px/frame) +
+// the exported scroll-camera centre in world px (readable for GDB / tests).
+uint8_t shooter_scroll_speed = 32;
+int16_t shmup_cam_x = 0;
+int16_t shmup_cam_y = 0;
 }
 
 void hw_set_scene_type(uint8_t type)
@@ -818,6 +840,72 @@ namespace
         if(ny < 0) ny = 0;
         p.y = (uint16_t)ny;
         p.moving = plat_vel_y != 0;
+    }
+
+    // --- M13f SHMUP scroll controller (state hoisted to the camera block
+    // above so hw_load_scene / hw_render can see it) ---------------------
+    void shmup_update()
+    {
+        Actor& p = actors[0];
+        if(!p.active) return;
+        if(!shmup_inited)
+        {
+            shmup_inited = true;
+            shmup_dir = p.dir;
+            shmup_end = false;
+            shmup_cx = clamp_cam(to_world_x(p.x), scene_w_px, HALF_W);
+            shmup_cy = clamp_cam(to_world_y(p.y), scene_h_px, HALF_H);
+        }
+
+        // 8-way free movement (per-axis move_speed + tile collision).
+        const uint8_t spd = p.move_speed;
+        p.moving = false;
+        if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+        else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+        if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+        else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+
+        // Auto-scroll: advance the camera one step in shmup_dir, drag the
+        // player the same amount, and stop at the scene edge (clamp_cam pins
+        // the camera -> no change -> reached the end).
+        if(!shmup_end)
+        {
+            const bn::fixed step = bn::fixed(shooter_scroll_speed) / 16; // px/frame
+            const int drag = shooter_scroll_speed * 2;                  // GBA subpx (32/px vs GB 16/px)
+            bn::fixed tx = shmup_cx, ty = shmup_cy;
+            if(shmup_dir == 3)      tx = shmup_cx - step;               // left
+            else if(shmup_dir == 1) tx = shmup_cx + step;               // right
+            else if(shmup_dir == 2) ty = shmup_cy - step;               // up
+            else                    ty = shmup_cy + step;               // down
+            const bn::fixed clx = clamp_cam(tx, scene_w_px, HALF_W);
+            const bn::fixed cly = clamp_cam(ty, scene_h_px, HALF_H);
+            if(clx == shmup_cx && cly == shmup_cy)
+            {
+                shmup_end = true;
+            }
+            else
+            {
+                if(shmup_dir == 3)      p.x = (uint16_t)((int)p.x - drag);
+                else if(shmup_dir == 1) p.x = (uint16_t)((int)p.x + drag);
+                else if(shmup_dir == 2) p.y = (uint16_t)((int)p.y - drag);
+                else                    p.y = (uint16_t)((int)p.y + drag);
+                shmup_cx = clx;
+                shmup_cy = cly;
+            }
+        }
+
+        // Lock the player to the visible screen (SHMUP keeps them on-screen).
+        const int cam_x_px = shmup_cx.right_shift_integer();
+        const int cam_y_px = shmup_cy.right_shift_integer();
+        const int minx = (cam_x_px - HALF_W + 8 + scene_w_px / 2) * SUBPX;
+        const int maxx = (cam_x_px + HALF_W - 8 + scene_w_px / 2) * SUBPX;
+        const int miny = (cam_y_px - HALF_H + 8 + scene_h_px / 2) * SUBPX;
+        const int maxy = (cam_y_px + HALF_H - 8 + scene_h_px / 2) * SUBPX;
+        if((int)p.x < minx) p.x = (uint16_t)minx; else if((int)p.x > maxx) p.x = (uint16_t)maxx;
+        if((int)p.y < miny) p.y = (uint16_t)miny; else if((int)p.y > maxy) p.y = (uint16_t)maxy;
+
+        shmup_cam_x = (int16_t)cam_x_px;
+        shmup_cam_y = (int16_t)cam_y_px;
     }
 
     // GB platform.c core loop, states only (M13b): GROUND/JUMP/FALL with
@@ -1075,6 +1163,7 @@ void hw_player_update(void)
     // M13a/b dispatch: PLATFORM runs its own physics; SHMUP/ADVENTURE (M13f)
     // still use the top-down controller below.
     if(gba_current_scene_type == 1) { platform_update(); return; }
+    if(gba_current_scene_type == 3) { shmup_update(); return; }   // M13f SHMUP
     Actor& p = actors[0];
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.
