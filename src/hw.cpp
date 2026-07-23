@@ -691,11 +691,23 @@ int16_t plat_hold_grav = 512;         // gravity while rising and holding jump
 int16_t plat_max_fall_vel = 20000;    // terminal velocity
 int16_t plat_climb_vel = 4000;        // ladder climb velocity (M13c)
 uint8_t plat_drop_through_active = 1; // one-way drop-through enabled (M13c)
+// M13d feel-parity tunables (GB engine.json defaults).
+int16_t plat_run_vel = 10496;         // max run velocity (B held)
+int16_t plat_run_acc = 228;           // run acceleration
+int16_t plat_run_boost = 0;           // extra jump boost from horizontal speed
+uint8_t plat_coyote_frames = 2;       // jump grace after leaving ground
+uint8_t plat_jump_buffer_frames = 2;  // jump pre-press window before landing
+uint8_t plat_extra_jumps = 1;         // air jumps (double jump)
+int16_t plat_jump_reduction = 0;      // per-air-jump height reduction
+uint8_t plat_air_control = 1;         // horizontal control while airborne
 // Player platform state, GB's enum order: 0 FALL, 1 GROUND, 2 JUMP, (3 DASH,)
-// 4 LADDER. Velocities exported alongside it for GDB / runtime-test checks.
+// 4 LADDER. Velocities + feel timers exported for GDB / runtime-test checks.
 uint8_t plat_state = 0;
 int16_t plat_vel_x = 0;
 int16_t plat_vel_y = 0;
+uint8_t plat_coyote_timer = 0;        // frames of coyote jump left (M13d)
+uint8_t plat_jump_buffer_timer = 0;   // frames of buffered jump left (M13d)
+uint8_t plat_extra_jumps_counter = 0; // air jumps left (M13d)
 }
 
 void hw_set_scene_type(uint8_t type)
@@ -716,6 +728,8 @@ namespace
     uint8_t plat_hold_timer = 0;
     uint8_t plat_drop_timer = 0;      // frames of suppressed TOP landings (drop-through)
     bool plat_ladder_block_v = false; // must release up/down after grabbing a ladder
+    int16_t plat_jump_reduction_vel = 0; // accumulated reduction for stacked air jumps (M13d)
+    int16_t plat_jump_vel_per_frame = 0; // hold + run boost applied per JUMP frame (M13d)
     inline int plat_delta_subpx(int v) { return (v >> 8) << 2; }
     inline uint8_t coll_at_px(int px, int py)
     {
@@ -818,10 +832,19 @@ namespace
         if(!p.active) return;
         if(plat_state == 4) { ladder_update(p); return; }  // LADDER (M13c)
 
-        // Horizontal input (handle_horizontal_input parity).
+        // Horizontal input (handle_horizontal_input parity). B is the run
+        // modifier (M13d): running raises the cap + accel. Airborne with air
+        // control disabled coasts - velocity unchanged, no input, no decel (GB).
         const bool left = bn::keypad::left_held();
         const bool right = bn::keypad::right_held();
-        if(left || right)
+        const bool run = bn::keypad::b_held();
+        const int max_vel = run ? plat_run_vel : plat_walk_vel;
+        const int acc = run ? plat_run_acc : plat_walk_acc;
+        if(plat_state != 1 && plat_air_control == 0)
+        {
+            // no horizontal control while airborne: coast
+        }
+        else if(left || right)
         {
             const int dir = right ? 1 : -1;
             int v = plat_vel_x * dir;             // input-aligned velocity
@@ -830,11 +853,11 @@ namespace
                 v += plat_turn_acc;               // reversing: turn friction
                 if(v > 0) v = 0;
             }
-            else if(v <= plat_walk_vel)
+            else if(v <= max_vel)
             {
-                v += plat_walk_acc;
+                v += acc;
                 if(v < plat_min_vel) v = plat_min_vel;
-                if(v > plat_walk_vel) v = plat_walk_vel;
+                if(v > max_vel) v = max_vel;
             }
             else v -= plat_dec;                   // above max: settle down
             plat_vel_x = (int16_t)(v * dir);
@@ -853,28 +876,76 @@ namespace
         // subpixels; the body spans ~16px, so feet = +8px, head = -8px.
         const int cx_px = p.x >> 5;
         const bool jump_held = bn::keypad::a_held();
+        const bool jump_pressed = bn::keypad::a_pressed();
+        const uint8_t enter_state = plat_state;   // jumps decided on the entering state
 
-        if(plat_state == 1)                       // GROUND
+        // state_enter_jump parity: upward velocity, hold-boost setup (+ run
+        // boost from horizontal speed), and timers cleared.
+        auto begin_jump = [&]() {
+            plat_state = 2;
+            plat_hold_timer = plat_jump_hold_frames;
+            if(-plat_jump_vel < plat_vel_y) plat_vel_y = (int16_t)-plat_jump_vel;
+            int jpf = plat_jump_hold_vel;
+            if(plat_run_boost != 0 && plat_run_vel != 0)
+            {
+                const int avx = plat_vel_x < 0 ? -plat_vel_x : plat_vel_x;
+                jpf += (avx / (plat_run_vel >> 7)) * (plat_run_boost >> 7);
+            }
+            plat_jump_vel_per_frame = (int16_t)jpf;
+            plat_coyote_timer = 0;
+            plat_jump_buffer_timer = 0;
+        };
+
+        if(enter_state == 1)                      // GROUND
         {
-            if(bn::keypad::a_pressed())           // state_enter_jump parity
+            // enter_ground parity: refresh jump grants every grounded frame.
+            plat_coyote_timer = plat_coyote_frames;
+            plat_extra_jumps_counter = plat_extra_jumps;
+            plat_jump_reduction_vel = 0;
+            if((jump_pressed || plat_jump_buffer_timer != 0) && plat_drop_timer == 0)
             {
-                plat_state = 2;
-                plat_hold_timer = plat_jump_hold_frames;
-                if(-plat_jump_vel < plat_vel_y) plat_vel_y = (int16_t)-plat_jump_vel;
+                begin_jump();                     // standard / buffered jump
             }
-            else if(!(coll_at_px(cx_px, (int)(p.y >> 5) + 8) & 0x01))
+            else
             {
-                plat_state = 0;                   // walked off a ledge -> FALL
-            }
-            else if(plat_drop_through_active && bn::keypad::down_held())
-            {
-                // Drop-through (M13c, GB default DOWN-hold input): only falls
-                // through one-way tiles - TOP set but no other solid faces.
-                const uint8_t footing = coll_at_px(cx_px, (int)(p.y >> 5) + 8);
-                if((footing & 0x0f) == 0x01)
+                plat_jump_buffer_timer = 0;
+                if(!(coll_at_px(cx_px, (int)(p.y >> 5) + 8) & 0x01))
                 {
-                    plat_state = 0;
-                    plat_drop_timer = 6;          // suppress TOP landings briefly
+                    plat_state = 0;               // walked off a ledge -> FALL
+                }
+                else if(plat_drop_through_active && bn::keypad::down_held())
+                {
+                    // Drop-through (M13c): only one-way tiles (TOP, no other
+                    // solid faces).
+                    const uint8_t footing = coll_at_px(cx_px, (int)(p.y >> 5) + 8);
+                    if((footing & 0x0f) == 0x01)
+                    {
+                        plat_state = 0;
+                        plat_drop_timer = 6;      // suppress TOP landings briefly
+                    }
+                }
+            }
+        }
+        else if(enter_state == 0 || enter_state == 2) // airborne: FALL / JUMP
+        {
+            // M13d: coyote time, double jump, jump buffering.
+            if(plat_coyote_timer != 0) plat_coyote_timer--;
+            if(plat_jump_buffer_timer != 0) plat_jump_buffer_timer--;
+            if(jump_pressed)
+            {
+                if(plat_coyote_timer != 0)
+                {
+                    begin_jump();                 // coyote-time ground jump
+                }
+                else if(plat_extra_jumps_counter != 0)
+                {
+                    plat_extra_jumps_counter--;   // double / extra jump
+                    plat_jump_reduction_vel += plat_jump_reduction;
+                    begin_jump();
+                }
+                else
+                {
+                    plat_jump_buffer_timer = plat_jump_buffer_frames;
                 }
             }
         }
@@ -884,7 +955,10 @@ namespace
         {
             if(plat_hold_timer != 0 && jump_held)
             {
-                plat_vel_y = (int16_t)(plat_vel_y - plat_jump_hold_vel);
+                // per-frame boost, then the accumulated double-jump reduction.
+                int vy = plat_vel_y - plat_jump_vel_per_frame + plat_jump_reduction_vel;
+                if(vy > 0) vy = 0;
+                plat_vel_y = (int16_t)vy;
                 plat_hold_timer--;
             }
             else plat_hold_timer = 0;
