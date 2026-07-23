@@ -19,6 +19,7 @@
 #include "bn_sprite_ptr.h"
 #include "bn_sprite_tiles_item.h"
 #include "bn_regular_bg_ptr.h"
+#include "bn_affine_bg_ptr.h" // M8d Mode-7 scene backgrounds
 #include "bn_bg_palettes.h"
 #include "bn_bg_palette_ptr.h" // panel recolour for .UI_COLOR_BLACK (M11d)
 #include "bn_sprite_palette_ptr.h" // sprite bank recolour for VM_LOAD_PALETTE (M12d)
@@ -339,6 +340,13 @@ namespace
         overlay_inited = true;
     }
     bn::optional<bn::regular_bg_ptr> scene_bg;   // the current scene's background
+    // M8d: an affine (Mode-7) scene background - a scene is affine when its
+    // script uses the Rotate/Scale Background event (eject emits an affine
+    // asset + sets GbaScene.affine). Only one of scene_bg / scene_affine_bg is
+    // live per scene. The transform op drives its rotation + scale.
+    bn::optional<bn::affine_bg_ptr> scene_affine_bg;
+    bn::fixed bg_rot = 0;                         // current rotation angle (degrees)
+    bn::fixed bg_scale = 1;                       // current uniform scale
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
 
     // Choice / menu cursor state (M11a, VM_CHOICE). The menu text is a normal
@@ -474,6 +482,8 @@ namespace
     }
 }
 
+extern int16_t gba_bg_angle; // defined below (M8d)
+
 void hw_load_scene(int scene_idx, int width_px, int height_px)
 {
     // Swap in this scene's background and clear actors carried from a previous scene;
@@ -484,8 +494,21 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     scene_h_px = height_px > 0 ? height_px : 160;
     if(!camera) camera = bn::camera_ptr::create(0, 0);
     else        camera->set_position(0, 0);
-    scene_bg = gba_create_scene_bg(scene_idx);
-    scene_bg->set_camera(*camera);
+    // M8d: an affine scene swaps in an affine_bg (Mode-7) instead of the
+    // regular bg; the transform op then rotates/scales it. Non-affine scenes
+    // are unchanged (gba_create_scene_affine_bg returns nullopt in that case).
+    bg_rot = 0; bg_scale = 1; gba_bg_angle = 0;
+    scene_affine_bg = gba_create_scene_affine_bg(scene_idx);
+    if(scene_affine_bg)
+    {
+        scene_bg.reset();
+        scene_affine_bg->set_camera(*camera);
+    }
+    else
+    {
+        scene_bg = gba_create_scene_bg(scene_idx);
+        scene_bg->set_camera(*camera);
+    }
     hw_overlay_hide(); // clear any dialogue box carried from the previous scene
     for(int i = 0; i < 8; ++i) sprite_pal_set[i] = false; // palettes reload per scene (M12d)
     shmup_inited = false; // SHMUP re-inits from the new player's facing (M13f)
@@ -691,6 +714,9 @@ void hw_set_sprites_visible(uint8_t mode)
 // M13a: the loaded scene's GBA_SCENE_* type. Exported (not anonymous-namespace)
 // so the GDB stub and runtime tests can read it under LTO.
 uint8_t gba_current_scene_type = 0;
+// M8d: the affine scene bg's rotation angle (whole degrees), exported so the
+// GDB stub / runtime tests can observe the Mode-7 transform.
+int16_t gba_bg_angle = 0;
 
 // --- M13b: core platformer physics (GROUND/JUMP/FALL) --------------------
 // The plat_* tunables are GB Studio ENGINE FIELDS: initialized to GB's
@@ -1178,6 +1204,21 @@ void hw_player_update(void)
     else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
     if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
     else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+}
+
+// M8d VM_SET_BG_TRANSFORM: rotate + scale the affine scene background.
+// angle is whole degrees; scale is fixed-point x256 (256 = 1.0). No-op on a
+// regular (non-affine) scene. Exports the angle for GDB/runtime tests.
+void hw_bg_transform(int angle, int scale)
+{
+    bg_rot = bn::fixed(((angle % 360) + 360) % 360);
+    bg_scale = scale > 0 ? bn::fixed(scale) / 256 : bn::fixed(1);
+    gba_bg_angle = (int16_t)bg_rot.right_shift_integer();
+    if(scene_affine_bg)
+    {
+        scene_affine_bg->set_rotation_angle(bg_rot);
+        scene_affine_bg->set_scale(bg_scale);
+    }
 }
 
 void hw_overlay_move_to(int x, int y, int speed)

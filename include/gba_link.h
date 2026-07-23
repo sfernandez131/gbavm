@@ -103,6 +103,7 @@ typedef struct GbaScene {
     // (0 for POINTNCLICK/LOGO); non-TOPDOWN movers use the top-down
     // controller until their controllers land (PLATFORM = M13b).
     unsigned char scene_type;
+    unsigned char affine; // M8d: 1 = affine (Mode-7) bg (loader creates affine_bg)
 } GbaScene;
 
 // GbaScene.scene_type values (M13a).
