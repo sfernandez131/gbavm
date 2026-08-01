@@ -30,6 +30,7 @@ void hw_render(void);
 void hw_set_player_move(uint8_t enabled);
 void hw_set_scene_type(uint8_t type); // M13a: GBA_SCENE_* controller dispatch
 void hw_bg_transform(int angle, int scale); // M8d: rotate/scale the affine scene bg
+void hw_bg_spin(int speed); // M8d: auto-spin the affine scene bg (deg/frame x256)
 // Set the loaded scene's collision grid (one byte/tile, row-major). Movement is
 // blocked into any tile whose low nibble is non-zero, and outside the grid bounds.
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);
