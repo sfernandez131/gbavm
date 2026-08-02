@@ -536,7 +536,8 @@ static const UBYTE vm_args_len[256] = {
     [0x70]=6, [0x71]=2, [0x72]=1, [0x73]=1,
     // palettes (M12c): LOAD_PALETTE mask,options (+ inline 8-byte rows per mask bit)
     [0x7C]=2,
-    [0x97]=2, // M8d SET_BG_TRANSFORM angle, scale
+    [0x97]=4, // M8d SET_BG_TRANSFORM angle, scale (two i16 = 4 bytes)
+    [0x98]=2, // M8d SET_BG_SPIN velocity (deg/frame x256)
 };
 
 // little-endian fixed-argument readers
@@ -691,7 +692,8 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x91: hw_overlay_move_to(A_U8(0), A_U8(1), A_I8(2)); break;
         case 0x92: hw_overlay_show(A_U8(0), A_U8(1), A_U8(2), A_U8(3)); break;
         case 0x93: hw_overlay_hide(); break;
-        case 0x97: hw_bg_transform(A_I16(0), A_I16(1)); break; // M8d
+        case 0x97: hw_bg_transform(A_I16(0), A_I16(2)); break; // M8d (scale @ +2)
+        case 0x98: hw_bg_spin(A_I16(0)); break; // M8d auto-spin
         // M12c VM_LOAD_PALETTE: mask + options, followed by one inline 8-byte row
         // (4 RGB555 words) per set mask bit; hw applies them to the bg palette banks.
         case 0x7C: { UBYTE mask = A_U8(0); UBYTE n = 0;

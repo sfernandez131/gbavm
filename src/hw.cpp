@@ -483,6 +483,7 @@ namespace
 }
 
 extern int16_t gba_bg_angle; // defined below (M8d)
+extern int16_t gba_bg_spin;  // defined below (M8d): affine auto-spin, deg/frame x256
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
 {
@@ -497,7 +498,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     // M8d: an affine scene swaps in an affine_bg (Mode-7) instead of the
     // regular bg; the transform op then rotates/scales it. Non-affine scenes
     // are unchanged (gba_create_scene_affine_bg returns nullopt in that case).
-    bg_rot = 0; bg_scale = 1; gba_bg_angle = 0;
+    bg_rot = 0; bg_scale = 1; gba_bg_angle = 0; gba_bg_spin = 0;
     scene_affine_bg = gba_create_scene_affine_bg(scene_idx);
     if(scene_affine_bg)
     {
@@ -574,6 +575,18 @@ void hw_render(void)
             --shake_frames;
         }
         camera->set_position(cx, cy);
+    }
+
+    // M8d: auto-spin the affine (Mode-7) scene bg by gba_bg_spin (deg/frame,
+    // x256 fixed) each frame. Composes with the Rotate/Scale event, which sets
+    // the base angle/scale; spinning advances the angle from there.
+    if(scene_affine_bg && gba_bg_spin != 0)
+    {
+        bg_rot += bn::fixed(gba_bg_spin) / 256;
+        while(bg_rot >= 360) bg_rot -= 360;
+        while(bg_rot < 0)    bg_rot += 360;
+        gba_bg_angle = (int16_t)bg_rot.right_shift_integer();
+        scene_affine_bg->set_rotation_angle(bg_rot);
     }
 
     for(int i = 0; i < MAX_ACTORS; ++i)
@@ -717,6 +730,10 @@ uint8_t gba_current_scene_type = 0;
 // M8d: the affine scene bg's rotation angle (whole degrees), exported so the
 // GDB stub / runtime tests can observe the Mode-7 transform.
 int16_t gba_bg_angle = 0;
+// M8d: affine auto-spin velocity (deg/frame, x256 fixed; signed). Set by the
+// Spin Background event (op 0x98); hw_render advances gba_bg_angle by it each
+// frame. Exported for the GDB stub / runtime tests. Reset on scene load.
+int16_t gba_bg_spin = 0;
 
 // --- M13b: core platformer physics (GROUND/JUMP/FALL) --------------------
 // The plat_* tunables are GB Studio ENGINE FIELDS: initialized to GB's
@@ -1219,6 +1236,14 @@ void hw_bg_transform(int angle, int scale)
         scene_affine_bg->set_rotation_angle(bg_rot);
         scene_affine_bg->set_scale(bg_scale);
     }
+}
+
+// M8d VM_SET_BG_SPIN: set the affine scene bg's auto-spin velocity (deg/frame,
+// x256 fixed; signed - negative spins the other way, 0 stops). hw_render applies
+// it each frame. No visible effect on a regular (non-affine) scene.
+void hw_bg_spin(int speed)
+{
+    gba_bg_spin = (int16_t)speed;
 }
 
 void hw_overlay_move_to(int x, int y, int speed)
