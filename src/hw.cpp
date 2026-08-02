@@ -1246,6 +1246,20 @@ void hw_bg_spin(int speed)
     gba_bg_spin = (int16_t)speed;
 }
 
+// M8d VM_SET_BG_ANGLE_VAR: set the affine scene bg's rotation angle (whole
+// degrees) from a script variable's value, leaving the scale untouched. Lets a
+// script drive Mode-7 rotation from any computed value (e.g. steering). No-op
+// visible effect on a regular (non-affine) scene.
+void hw_bg_set_angle(int angle)
+{
+    bg_rot = bn::fixed(((angle % 360) + 360) % 360);
+    gba_bg_angle = (int16_t)bg_rot.right_shift_integer();
+    if(scene_affine_bg)
+    {
+        scene_affine_bg->set_rotation_angle(bg_rot);
+    }
+}
+
 void hw_overlay_move_to(int x, int y, int speed)
 {
     // Non-blocking: set the box target; hw_overlay_update slides it there. The box
