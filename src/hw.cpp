@@ -484,6 +484,7 @@ namespace
 
 extern int16_t gba_bg_angle; // defined below (M8d)
 extern int16_t gba_bg_spin;  // defined below (M8d): affine auto-spin, deg/frame x256
+extern int16_t gba_bg_scale; // defined below (M8d): affine scale, x256 (256 = 1.0)
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
 {
@@ -498,7 +499,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     // M8d: an affine scene swaps in an affine_bg (Mode-7) instead of the
     // regular bg; the transform op then rotates/scales it. Non-affine scenes
     // are unchanged (gba_create_scene_affine_bg returns nullopt in that case).
-    bg_rot = 0; bg_scale = 1; gba_bg_angle = 0; gba_bg_spin = 0;
+    bg_rot = 0; bg_scale = 1; gba_bg_angle = 0; gba_bg_spin = 0; gba_bg_scale = 256;
     scene_affine_bg = gba_create_scene_affine_bg(scene_idx);
     if(scene_affine_bg)
     {
@@ -734,6 +735,10 @@ int16_t gba_bg_angle = 0;
 // Spin Background event (op 0x98); hw_render advances gba_bg_angle by it each
 // frame. Exported for the GDB stub / runtime tests. Reset on scene load.
 int16_t gba_bg_spin = 0;
+// M8d: the affine bg's current scale as x256 fixed point (256 = 1.0), exported so
+// the GDB stub / runtime tests can observe it. Set by SET_BG_TRANSFORM (0x97) and
+// SET_BG_SCALE_VAR (0x9A); reset to 256 on scene load.
+int16_t gba_bg_scale = 256;
 
 // --- M13b: core platformer physics (GROUND/JUMP/FALL) --------------------
 // The plat_* tunables are GB Studio ENGINE FIELDS: initialized to GB's
@@ -1231,6 +1236,7 @@ void hw_bg_transform(int angle, int scale)
     bg_rot = bn::fixed(((angle % 360) + 360) % 360);
     bg_scale = scale > 0 ? bn::fixed(scale) / 256 : bn::fixed(1);
     gba_bg_angle = (int16_t)bg_rot.right_shift_integer();
+    gba_bg_scale = (int16_t)(scale > 0 ? scale : 256);
     if(scene_affine_bg)
     {
         scene_affine_bg->set_rotation_angle(bg_rot);
@@ -1257,6 +1263,21 @@ void hw_bg_set_angle(int angle)
     if(scene_affine_bg)
     {
         scene_affine_bg->set_rotation_angle(bg_rot);
+    }
+}
+
+// M8d VM_SET_BG_SCALE_VAR: set the affine scene bg's scale from a script
+// variable's value, a PERCENTAGE (100 = original size), leaving the rotation
+// untouched. Lets a script drive Mode-7 zoom from any computed value. No visible
+// effect on a regular (non-affine) scene.
+void hw_bg_set_scale(int scale_percent)
+{
+    const int scale256 = scale_percent > 0 ? scale_percent * 256 / 100 : 256;
+    bg_scale = bn::fixed(scale256) / 256;
+    gba_bg_scale = (int16_t)scale256;
+    if(scene_affine_bg)
+    {
+        scene_affine_bg->set_scale(bg_scale);
     }
 }
 

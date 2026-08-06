@@ -539,6 +539,7 @@ static const UBYTE vm_args_len[256] = {
     [0x97]=4, // M8d SET_BG_TRANSFORM angle, scale (two i16 = 4 bytes)
     [0x98]=2, // M8d SET_BG_SPIN velocity (deg/frame x256)
     [0x99]=2, // M8d SET_BG_ANGLE_VAR variable index (reads the angle from it)
+    [0x9A]=2, // M8d SET_BG_SCALE_VAR variable index (reads the scale % from it)
 };
 
 // little-endian fixed-argument readers
@@ -696,6 +697,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x97: hw_bg_transform(A_I16(0), A_I16(2)); break; // M8d (scale @ +2)
         case 0x98: hw_bg_spin(A_I16(0)); break; // M8d auto-spin
         case 0x99: hw_bg_set_angle(*I16P(A_I16(0))); break; // M8d angle from var
+        case 0x9A: hw_bg_set_scale(*I16P(A_I16(0))); break; // M8d scale from var
         // M12c VM_LOAD_PALETTE: mask + options, followed by one inline 8-byte row
         // (4 RGB555 words) per set mask bit; hw applies them to the bg palette banks.
         case 0x7C: { UBYTE mask = A_U8(0); UBYTE n = 0;
