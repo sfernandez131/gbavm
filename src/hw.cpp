@@ -43,6 +43,7 @@
 #include "gba_music_assets.h" // generated: DMG music track index -> dmg_music_item (M5a)
 #include "gba_sfx_assets.h" // generated: sound index -> sound_item (M5b)
 #include "gba_emote_assets.h" // generated: emote index -> sprite (M10d)
+#include "gba_user_code.h" // generated: author "Run Custom Code (C++)" snippets (M8e)
 
 namespace
 {
@@ -1285,6 +1286,14 @@ void hw_bg_set_scale(int scale_percent)
     {
         scene_affine_bg->set_scale(bg_scale);
     }
+}
+
+// M8e VM_USER_CODE: run the author's Custom Code snippet with this index. The
+// snippet bodies + this dispatch live in the generated gba_user_code.h; the C
+// VM calls in via this extern "C" trampoline so a snippet may use Butano freely.
+void hw_user_code(int idx)
+{
+    gba_user_run(idx);
 }
 
 void hw_overlay_move_to(int x, int y, int speed)
