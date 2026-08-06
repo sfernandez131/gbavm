@@ -52,7 +52,13 @@ namespace
     // needs sprite-VRAM budgeting (shared actor tiles / a bigger sprite pool),
     // tracked in docs/M8_SUPERPOWERS_DESIGN.md. All actor loops use this
     // constant, so the bump is otherwise clean.
-    constexpr int MAX_ACTORS = 12;
+    // M8b: matches GB Studio's actor pool (gbvm actor.h MAX_ACTORS = 21, i.e. up
+    // to 20 placed actors + the player). The GB engine only renders
+    // MAX_ACTORS_ACTIVE = 12 at once (a GB hardware sprite limit); the GBA has 128
+    // OAM entries, so all 21 can be active/rendered. Raised from 12 to close the
+    // parity gap (GB projects with 13-20 placed actors previously lost actors on
+    // GBA). Verified: 24 force-activated actors run with no Butano assert.
+    constexpr int MAX_ACTORS = 21;
     constexpr int SUBPX = 32;            // GBVM actor position units per pixel (256 per 8px tile)
     constexpr int HALF_W = 120;          // half the 240x160 GBA screen
     constexpr int HALF_H = 80;
