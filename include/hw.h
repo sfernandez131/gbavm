@@ -33,6 +33,7 @@ void hw_bg_transform(int angle, int scale); // M8d: rotate/scale the affine scen
 void hw_bg_spin(int speed); // M8d: auto-spin the affine scene bg (deg/frame x256)
 void hw_bg_set_angle(int angle); // M8d: set the affine bg rotation only (keeps scale)
 void hw_bg_set_scale(int scale_percent); // M8d: set the affine bg scale only (percent)
+void hw_user_code(int idx); // M8e: run the author's Custom Code (C++) snippet idx
 // Set the loaded scene's collision grid (one byte/tile, row-major). Movement is
 // blocked into any tile whose low nibble is non-zero, and outside the grid bounds.
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);
