@@ -541,6 +541,8 @@ static const UBYTE vm_args_len[256] = {
     [0x99]=2, // M8d SET_BG_ANGLE_VAR variable index (reads the angle from it)
     [0x9A]=2, // M8d SET_BG_SCALE_VAR variable index (reads the scale % from it)
     [0x9B]=2, // M8e USER_CODE snippet index (author "Run Custom Code" event)
+    // Replace Tile at XY: u8 x, u8 y, i16 tileset index, i16 tile index in it.
+    [0x9C]=6,
 };
 
 // little-endian fixed-argument readers
@@ -700,6 +702,11 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x99: hw_bg_set_angle(*I16P(A_I16(0))); break; // M8d angle from var
         case 0x9A: hw_bg_set_scale(*I16P(A_I16(0))); break; // M8d scale from var
         case 0x9B: hw_user_code(A_I16(0)); break; // M8e run Custom Code snippet
+        // Replace Tile at XY (matrix slice B): overwrite the graphics of the bg
+        // tile shown at (x, y) with a tile from a project tileset. The tile index
+        // is read THROUGH A VARIABLE, matching GB Studio (vm_replace_tile_xy takes
+        // idx_start_tile as a VM reference, so scripts can compute it).
+        case 0x9C: hw_replace_bg_tile_xy(A_U8(0), A_U8(1), A_I16(2), *I16P(A_I16(4))); break;
         // M12c VM_LOAD_PALETTE: mask + options, followed by one inline 8-byte row
         // (4 RGB555 words) per set mask bit; hw applies them to the bg palette banks.
         case 0x7C: { UBYTE mask = A_U8(0); UBYTE n = 0;
