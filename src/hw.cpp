@@ -43,6 +43,10 @@
 #include "gba_music_assets.h" // generated: DMG music track index -> dmg_music_item (M5a)
 #include "gba_sfx_assets.h" // generated: sound index -> sound_item (M5b)
 #include "gba_emote_assets.h" // generated: emote index -> sprite (M10d)
+#include "gba_tileset_assets.h" // generated: tileset index -> tile data (slice B)
+#include "bn_regular_bg_map_cell_info.h" // reading the map cell under a Replace Tile
+#include "bn_regular_bg_map_ptr.h"
+#include "bn_regular_bg_tiles_ptr.h"
 #include "gba_user_code.h" // generated: author "Run Custom Code (C++)" snippets (M8e)
 
 namespace
@@ -413,6 +417,10 @@ namespace
     bool shmup_end = false;
     bn::fixed shmup_cx = 0;
     bn::fixed shmup_cy = 0;
+    // Replace Tile (slice B): Butano queues tile overwrites and asserts when the
+    // queue is full, so the engine counts them per frame and drops the excess.
+    constexpr int MAX_TILE_OVERWRITES_PER_FRAME = 24; // under Butano's 32
+    int tiles_overwritten_this_frame = 0;
     int shake_frames = 0;                        // camera shake (M6h): frames of shake left
     int shake_total = 0;                         // total shake length, for amplitude decay
 
@@ -553,6 +561,9 @@ extern uint8_t gba_current_scene_type; // defined below (M13a); used by the SHMU
 
 void hw_render(void)
 {
+    // A new frame: Butano's tile-overwrite queue was flushed at the last commit,
+    // so the per-frame budget resets here (see hw_replace_bg_tile_xy).
+    tiles_overwritten_this_frame = 0;
     // Camera follows the lowest-index active actor (the player / first placed actor),
     // clamped so the view never leaves the scene.
     if(camera)
@@ -1294,6 +1305,52 @@ void hw_bg_set_scale(int scale_percent)
 void hw_user_code(int idx)
 {
     gba_user_run(idx);
+}
+
+// Replace Tile: overwrite the pixel data of the bg tile shown at map cell
+// (x, y) with tile `startIdx` from project tileset `tilesetIdx`.
+//
+// GB Studio rewrites the TILE'S GRAPHICS, not the map cell (vm_replace_tile_xy
+// reads the cell only to learn which tile slot to overwrite), so every cell
+// using that tile changes at once - that is what animated tiles rely on, and
+// changing the cell instead would look right in a one-tile test and wrong in a
+// real project. Butano's overwrite_tile writes straight to VRAM, so no RAM copy
+// of the tileset is needed.
+void hw_replace_bg_tile_xy(int x, int y, int tilesetIdx, int startIdx)
+{
+    if(!scene_bg) return; // affine scenes have no regular bg to patch
+
+    int tileCount = 0;
+    const bn::tile* tiles = gba_tileset_tiles(tilesetIdx, &tileCount);
+    if(!tiles || startIdx < 0 || startIdx >= tileCount) return;
+
+    // Which tile slot is that map cell showing?
+    const bn::regular_bg_map_ptr map = scene_bg->map();
+    const bn::optional<bn::span<const bn::regular_bg_map_cell>> cells = map.cells_ref();
+    if(!cells) return; // a map we do not own the cells of (should not happen)
+
+    const int w = map.dimensions().width();
+    const int h = map.dimensions().height();
+    if(x < 0 || y < 0 || x >= w || y >= h) return;
+
+    const bn::regular_bg_map_cell_info info((*cells)[y * w + x]);
+    bn::regular_bg_tiles_ptr bgTiles = scene_bg->tiles();
+
+    // Butano ASSERTS on an out-of-range destination, and an assert halts the
+    // console. A script can name any map position, so this has to be a check,
+    // not an assumption.
+    const int destTile = info.tile_index();
+    if(destTile < 0 || destTile >= bgTiles.tiles_count()) return;
+
+    // overwrite_tile QUEUES the copy (applied at the next commit) into a buffer
+    // of BN_CFG_BG_BLOCKS_MAX_OVERWRITE_TILES entries - 32 by default - and
+    // asserts when it is full. A script replacing a whole screenful in one frame
+    // would therefore hard-lock the game, so drop the excess instead: losing a
+    // few tile updates for a frame is recoverable, a halted console is not.
+    if(tiles_overwritten_this_frame >= MAX_TILE_OVERWRITES_PER_FRAME) return;
+    ++tiles_overwritten_this_frame;
+
+    bgTiles.overwrite_tile(destTile, tiles[startIdx]);
 }
 
 void hw_overlay_move_to(int x, int y, int speed)
