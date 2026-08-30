@@ -51,6 +51,22 @@
 
 namespace
 {
+    // --- input suppression (matrix slice C) ----------------------------------
+    // GB Studio's "Attach Script to Button" can claim a button with
+    // .OVERRIDE_DEFAULT, which in GB clears that key's bit from `joy` for the rest
+    // of the frame so the default action never sees it. gbavm reads Butano's keypad
+    // directly, so the VM hands us a per-frame mask instead (bit order = the KEY_BITS
+    // order hw_input_get builds) and every default-action read goes through k_*().
+    uint16_t input_suppress = 0;
+
+    inline bool k_right_held()  { return bn::keypad::right_held()  && !(input_suppress & 0x01); }
+    inline bool k_left_held()   { return bn::keypad::left_held()   && !(input_suppress & 0x02); }
+    inline bool k_up_held()     { return bn::keypad::up_held()     && !(input_suppress & 0x04); }
+    inline bool k_down_held()   { return bn::keypad::down_held()   && !(input_suppress & 0x08); }
+    inline bool k_a_held()      { return bn::keypad::a_held()      && !(input_suppress & 0x10); }
+    inline bool k_b_held()      { return bn::keypad::b_held()      && !(input_suppress & 0x20); }
+    inline bool k_a_pressed()   { return bn::keypad::a_pressed()   && !(input_suppress & 0x10); }
+
     // M8b: raise GB's tight actor cap. 12 active actors runs at a full 60fps
     // alongside the fixture's dialogue text + projectile sprites; 14+ trips
     // Butano's sprite budget (measured cliff, 60fps -> assert). Going higher
@@ -843,13 +859,13 @@ namespace
     {
         if(plat_ladder_block_v)
         {
-            if(!(bn::keypad::up_held() || bn::keypad::down_held()))
+            if(!(k_up_held() || k_down_held()))
                 plat_ladder_block_v = false;
             else return;
         }
-        if(bn::keypad::a_held() && bn::keypad::down_held()) return; // falling off
+        if(k_a_held() && k_down_held()) return; // falling off
         const int cx_px = p.x >> 5;
-        if(bn::keypad::up_held())
+        if(k_up_held())
         {
             const int head_py = (int)(p.y >> 5) - 7;
             if(is_ladder(coll_at_px(cx_px, head_py)))
@@ -859,7 +875,7 @@ namespace
                 plat_ladder_block_v = true;
             }
         }
-        else if(bn::keypad::down_held())
+        else if(k_down_held())
         {
             const int below_py = (int)(p.y >> 5) + 8;
             if(is_ladder(coll_at_px(cx_px, below_py)))
@@ -874,16 +890,16 @@ namespace
     {
         plat_vel_x = 0;
         plat_vel_y = 0;
-        if(bn::keypad::a_pressed())
+        if(k_a_pressed())
         {
-            if(bn::keypad::down_held()) { plat_state = 0; return; } // drop off
+            if(k_down_held()) { plat_state = 0; return; } // drop off
             plat_state = 2;                                          // jump off
             plat_hold_timer = plat_jump_hold_frames;
             plat_vel_y = (int16_t)-plat_jump_vel;
             return;
         }
         const int cx_px = p.x >> 5;
-        if(bn::keypad::up_held())
+        if(k_up_held())
         {
             if(is_ladder(coll_at_px(cx_px, (int)(p.y >> 5) - 7)))
                 plat_vel_y = (int16_t)-plat_climb_vel;
@@ -893,20 +909,20 @@ namespace
                 return;
             }
         }
-        else if(bn::keypad::down_held())
+        else if(k_down_held())
         {
             const uint8_t below = coll_at_px(cx_px, (int)(p.y >> 5) + 8);
             if(is_ladder(below)) plat_vel_y = (int16_t)plat_climb_vel;
             else if(below & 0x01) { plat_state = 1; return; } // stepped off the bottom
         }
         else if(!plat_ladder_block_v &&
-                (bn::keypad::left_held() || bn::keypad::right_held()))
+                (k_left_held() || k_right_held()))
         {
             plat_state = 0;                        // let go sideways
             return;
         }
         if(plat_ladder_block_v &&
-           !(bn::keypad::up_held() || bn::keypad::down_held()))
+           !(k_up_held() || k_down_held()))
             plat_ladder_block_v = false;
         int ny = (int)p.y + plat_delta_subpx(plat_vel_y);
         if(ny < 0) ny = 0;
@@ -932,10 +948,10 @@ namespace
         // 8-way free movement (per-axis move_speed + tile collision).
         const uint8_t spd = p.move_speed;
         p.moving = false;
-        if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
-        else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
-        if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
-        else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+        if(k_right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+        else if(k_left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+        if(k_up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+        else if(k_down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
 
         // Auto-scroll: advance the camera one step in shmup_dir, drag the
         // player the same amount, and stop at the scene edge (clamp_cam pins
@@ -995,9 +1011,9 @@ namespace
         // Horizontal input (handle_horizontal_input parity). B is the run
         // modifier (M13d): running raises the cap + accel. Airborne with air
         // control disabled coasts - velocity unchanged, no input, no decel (GB).
-        const bool left = bn::keypad::left_held();
-        const bool right = bn::keypad::right_held();
-        const bool run = bn::keypad::b_held();
+        const bool left = k_left_held();
+        const bool right = k_right_held();
+        const bool run = k_b_held();
         const int max_vel = run ? plat_run_vel : plat_walk_vel;
         const int acc = run ? plat_run_acc : plat_walk_acc;
         if(plat_state != 1 && plat_air_control == 0)
@@ -1035,8 +1051,8 @@ namespace
         // Body sample points: actor pos is the sprite centre in 32/px
         // subpixels; the body spans ~16px, so feet = +8px, head = -8px.
         const int cx_px = p.x >> 5;
-        const bool jump_held = bn::keypad::a_held();
-        const bool jump_pressed = bn::keypad::a_pressed();
+        const bool jump_held = k_a_held();
+        const bool jump_pressed = k_a_pressed();
         const uint8_t enter_state = plat_state;   // jumps decided on the entering state
 
         // state_enter_jump parity: upward velocity, hold-boost setup (+ run
@@ -1073,7 +1089,7 @@ namespace
                 {
                     plat_state = 0;               // walked off a ledge -> FALL
                 }
-                else if(plat_drop_through_active && bn::keypad::down_held())
+                else if(plat_drop_through_active && k_down_held())
                 {
                     // Drop-through (M13c): only one-way tiles (TOP, no other
                     // solid faces).
@@ -1209,7 +1225,7 @@ int hw_player_in_rect(int tx, int ty, int w, int h)
 int hw_interact_actor(void)
 {
     if(text_showing) return -1;
-    if(!bn::keypad::a_pressed()) return -1;
+    if(!k_a_pressed()) return -1;
     const Actor& p = actors[0];
     if(!p.active) return -1;
     int fx = (int)p.x / SUBPX / 8, fy = (int)p.y / SUBPX / 8;
@@ -1240,10 +1256,10 @@ void hw_player_update(void)
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.
     const uint8_t spd = p.move_speed;
-    if(bn::keypad::right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
-    else if(bn::keypad::left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
-    if(bn::keypad::up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
-    else if(bn::keypad::down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+    if(k_right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+    else if(k_left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
+    if(k_up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+    else if(k_down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
 }
 
 // M8d VM_SET_BG_TRANSFORM: rotate + scale the affine scene background.
@@ -1972,9 +1988,8 @@ void hw_actor_get_angle(uint16_t* params, int16_t* dest)
     if(id >= 0 && id < MAX_ACTORS) *dest = dir_angle_lookup[actors[id].dir & 3];
 }
 
-void hw_input_get(uint16_t* dst, uint8_t joyid)
+uint16_t hw_input_held(void)
 {
-    (void)joyid;
     // Bit order must match GB Studio's KEY_BITS (the masks the editor emits in
     // EVENT_IF_INPUT): direction keys in the low nibble, buttons in the high nibble.
     uint16_t m = 0;
@@ -1991,8 +2006,24 @@ void hw_input_get(uint16_t* dst, uint8_t joyid)
     // dst is a uint16 mask so they survive the read.
     if(bn::keypad::l_held())      m |= 0x100;
     if(bn::keypad::r_held())      m |= 0x200;
-    *dst = m;
+    return m;
 }
+
+void hw_input_get(uint16_t* dst, uint8_t joyid)
+{
+    (void)joyid;
+    *dst = hw_input_held();
+}
+
+// GB's VM_INPUT_WAIT resumes on `(joy != last_joy) && (joy & mask)` - any change to
+// the pad this frame, with a masked key held. any_pressed/any_released is that same
+// "joy changed" test on Butano's keypad.
+int hw_input_changed(void)
+{
+    return (bn::keypad::any_pressed() || bn::keypad::any_released()) ? 1 : 0;
+}
+
+void hw_input_set_suppress(uint16_t mask) { input_suppress = mask; }
 
 // --- projectiles (M10f) -------------------------------------------------------
 

@@ -60,6 +60,24 @@ UWORD sys_time = 0;
 typedef struct { UBYTE bank; UBYTE * pc; UBYTE interval; UWORD countdown; UBYTE active; } VM_TIMER;
 static VM_TIMER vm_timers[VM_MAX_TIMERS];
 
+// Input-attached scripts (matrix slice C) - GB Studio's "Attach Script to Button",
+// ported from gbvm's events.c/vm_gameboy.c. VM_CONTEXT_PREPARE stores a slot's script;
+// VM_INPUT_ATTACH points every button bit in a mask at that slot; VM_INPUT_DETACH clears
+// them. input_events_update() (main loop) fires a slot's script on the frame its button
+// goes down, and re-arms it once the previous run has terminated.
+//
+// GB has 8 buttons and indexes input_slots[] by button BIT; the GBA adds L (bit 8) and
+// R (bit 9), so both tables are 10 wide. A slot value carries GB's .OVERRIDE_DEFAULT flag
+// in bit 7 and the 1-based slot number in the low nibble - the same packing GB uses, so
+// the editor emits one operand shape for both targets.
+// VM_INPUT_BITS and the tables themselves are declared in vm.h.
+#define VM_INPUT_OVERRIDE_DEFAULT 0x80
+// Both tables are exported (not static) so the headless runtime test can assert the
+// state an "Attach Script to Button" leaves behind - LTO strips file-static symbols.
+VM_INPUT_EVENT vm_input_events[VM_INPUT_BITS];
+UBYTE vm_input_slots[VM_INPUT_BITS];
+static UWORD vm_input_last;   // held mask on the previous frame (GB's last_joy)
+
 #define EXCEPTION_CODE_NONE 0
 
 // Resolve operand index to a typed pointer (negative = stack-relative, positive = global).
@@ -541,6 +559,9 @@ static const UBYTE vm_args_len[256] = {
     [0x99]=2, // M8d SET_BG_ANGLE_VAR variable index (reads the angle from it)
     [0x9A]=2, // M8d SET_BG_SCALE_VAR variable index (reads the scale % from it)
     [0x9B]=2, // M8e USER_CODE snippet index (author "Run Custom Code" event)
+    // input attach/wait (slice C): WAIT mask(u16); ATTACH mask(u16), slot(u8);
+    // CONTEXT_PREPARE slot, bank, addr(ptr); DETACH mask(u16)
+    [0x52]=2, [0x53]=3, [0x55]=6, [0x5F]=2,
     // Replace Tile at XY: u8 x, u8 y, i16 tileset index, i16 tile index in it.
     [0x9C]=6,
 };
@@ -646,6 +667,26 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
                      break; }
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
+        // Input attach/wait (slice C). WAIT blocks the thread until the pad changes with
+        // a masked key held (gbvm vm_input_wait's `(joy != last_joy) && (joy & mask)`).
+        case 0x52: if (!(hw_input_changed() && (hw_input_held() & A_U16(0))))
+                       { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; }
+                   break;
+        // ATTACH mask, slot: point every button bit in the mask at `slot` (which carries
+        // the .OVERRIDE_DEFAULT flag in bit 7). DETACH mask: clear those bits.
+        case 0x53: { UWORD m = A_U16(0); UBYTE slot = A_U8(2);
+                     for (UBYTE i = 0; i < VM_INPUT_BITS; i++) if (m & (1u << i)) vm_input_slots[i] = slot;
+                     break; }
+        case 0x5F: { UWORD m = A_U16(0);
+                     for (UBYTE i = 0; i < VM_INPUT_BITS; i++) if (m & (1u << i)) vm_input_slots[i] = 0;
+                     break; }
+        // CONTEXT_PREPARE slot, bank, addr: bind a 1-based slot to a script.
+        case 0x55: { UBYTE slot = A_U8(0);
+                     if (slot != 0 && slot <= VM_INPUT_BITS) {
+                         VM_INPUT_EVENT * ev = &vm_input_events[slot - 1u];
+                         ev->bank = A_U8(1); ev->pc = A_PTR(2); ev->handle = 0;
+                     }
+                     break; }
         // projectiles (M10f). LAUNCH's i16 operand resolves to an {x, y, angle}
         // block on the VM stack (GB Studio pushes 3 words + passes .ARG2).
         case 0x80: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(1)); hw_projectile_launch(A_U8(0), r[0], r[1], (UBYTE)r[2]); break; }
@@ -751,6 +792,11 @@ void script_runner_init(UBYTE reset) {
                (VM_MAX_CONTEXTS * VM_CONTEXT_STACK_SIZE) * sizeof(UWORD));
         memset(CTXS, 0, sizeof(CTXS));
         memset(vm_timers, 0, sizeof(vm_timers)); // M6f: timers are per-scene
+        // Slice C: input-attached scripts are per-scene too (GB events_init(FALSE)).
+        memset(vm_input_events, 0, sizeof(vm_input_events));
+        memset(vm_input_slots, 0, sizeof(vm_input_slots));
+        vm_input_last = 0;
+        hw_input_set_suppress(0);
     }
     UWORD * base_addr = &script_memory[VM_HEAP_SIZE];
     free_ctxs = CTXS; first_ctx = 0;
@@ -811,6 +857,38 @@ UBYTE script_terminate(UBYTE ID) {
         ctx = ctx->next;
     }
     return FALSE;
+}
+
+// Slice C: fire input-attached scripts, ported from gbvm's events_update(). Runs once a
+// frame, before the built-in default actions, so a slot claiming .OVERRIDE_DEFAULT can
+// hide its key from player movement and the A-to-interact check (GB does that by clearing
+// the bit from `joy`; we hand the mask to hw_input_set_suppress instead).
+//
+// A slot fires on the frame its button goes DOWN (`vm_input_last` is GB's last_joy) and
+// only if its previous run has finished, and the script receives the key bit as its one
+// argument - both GB behaviours. Skipped while the VM is locked, which is what keeps
+// attached scripts from firing under a modal dialogue.
+void input_events_update(void) {
+    const UWORD held = hw_input_held();
+    UWORD suppress = 0;
+    if (!vm_lock_state) {
+        for (UBYTE i = 0; i < VM_INPUT_BITS; i++) {
+            const UWORD key = (UWORD)(1u << i);
+            if (!(held & key)) continue;
+            const UBYTE slot = vm_input_slots[i];
+            if (slot == 0) continue;
+            const UBYTE idx = (UBYTE)(slot & 0x0f);
+            if (idx == 0 || idx > VM_INPUT_BITS) continue;
+            VM_INPUT_EVENT * ev = &vm_input_events[idx - 1u];
+            if (!ev->pc) continue;
+            if (slot & VM_INPUT_OVERRIDE_DEFAULT) suppress |= key;
+            if (vm_input_last & key) continue;                  // held over from last frame
+            if (ev->handle == 0 || (ev->handle & SCRIPT_TERMINATED))
+                script_execute(ev->bank, ev->pc, &ev->handle, 1, (int)key);
+        }
+    }
+    hw_input_set_suppress(suppress);
+    vm_input_last = held;
 }
 
 // M6f: advance every armed timer one frame; when a slot's countdown elapses, run its

@@ -101,6 +101,15 @@ int hw_actor_active(int16_t id);                  // M6d: 1 if the actor is acti
 uint8_t hw_actor_dir(int16_t id);                 // M6d: the actor's facing (0 down,1 right,2 up,3 left)
 void hw_actor_get_angle(uint16_t* params, int16_t* dest); // 0x86  dir -> BRADS angle
 void hw_input_get(uint16_t* dst, uint8_t joyid);  // 0x54  GB-style button bitmask
+// Matrix slice C (input attach/wait). GB's events_update() works off `joy`/`last_joy`
+// and clears a key bit from `joy` when an attached script claims it with
+// .OVERRIDE_DEFAULT. gbavm reads Butano's keypad directly, so the VM drives these
+// three hooks instead:
+uint16_t hw_input_held(void);       // the raw held mask, same bit order as hw_input_get
+int hw_input_changed(void);         // 1 if any key was pressed or released this frame
+// Keys in `mask` are hidden from the built-in default actions (player movement and
+// the A-to-interact check) until the next call. Recomputed every frame by the VM.
+void hw_input_set_suppress(uint16_t mask);
 // 0x57 VM_FADE: advance the screen fade one frame (flags bit 0x02 = fade in, else
 // out). Returns 1 once the fade is complete; the VM blocks the thread until then.
 int hw_fade_step(uint8_t flags);
