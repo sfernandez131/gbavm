@@ -162,6 +162,17 @@ UBYTE script_terminate(UBYTE ID);
 UBYTE script_runner_update(void);
 // M6f: advance armed timers one frame, firing any that elapse (called from the main loop).
 void timers_update(void);
+// Slice C: fire any input-attached scripts whose button went down this frame, and
+// refresh the .OVERRIDE_DEFAULT suppression mask. Call once a frame, BEFORE the
+// built-in default actions (player movement, A-to-interact).
+void input_events_update(void);
+// Slice C state, exported for the headless runtime test: vm_input_slots[BIT] is the
+// slot attached to that button (0 = none, bit 7 = .OVERRIDE_DEFAULT), and
+// vm_input_events[SLOT-1] is the script that slot runs.
+#define VM_INPUT_BITS 10
+typedef struct { UBYTE bank; UBYTE * pc; UWORD handle; } VM_INPUT_EVENT;
+extern VM_INPUT_EVENT vm_input_events[VM_INPUT_BITS];
+extern UBYTE vm_input_slots[VM_INPUT_BITS];
 // Pending VM exception + its payload (read by the main loop after RUNNER_EXCEPTION).
 UBYTE vm_get_exception(void);
 UWORD vm_get_exception_param(void);
