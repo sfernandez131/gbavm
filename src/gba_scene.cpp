@@ -91,8 +91,12 @@ void gba_load_scene(unsigned int idx)
     {
         // Activate the actor this update thread drives, then run the thread (it
         // self-loops via VM_IDLE/VM_JUMP, so one script_execute persists it).
-        hw_actor_activate(s.actor_update_actors[i]);
-        script_execute(0, s.actor_updates[i], nullptr, 0);
+        const int16_t ai = (int16_t)s.actor_update_actors[i];
+        hw_actor_activate(ai);
+        // Slice D: register the script and hand script_execute the actor's handle slot,
+        // so VM_ACTOR_BEGIN_UPDATE / TERMINATE_UPDATE can restart or kill this thread.
+        hw_actor_set_update_script(ai, s.actor_updates[i]);
+        script_execute(0, s.actor_updates[i], hw_actor_update_handle(ai), 0);
     }
 }
 

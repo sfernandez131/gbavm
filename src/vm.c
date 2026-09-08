@@ -528,6 +528,10 @@ static const UBYTE vm_args_len[256] = {
     // actor properties (M10a): SET_MOVE_SPEED ref,speed; SET_HIDDEN ref,hidden; GET_DIR ref,dest
     // M10c: SET_ANIM_SET ref,state. M10d: ACTOR_EMOTE ref,emote
     [0x3E]=3, [0x3F]=3, [0x40]=4, [0x41]=3, [0x42]=3,
+    // actor animation control (matrix slice D): SET_ANIM_TICK ref,tick (GB's 0x3D is
+    // taken by MOVE_CANCEL here, so this one gets a free number among the actor ops);
+    // SET/GET_ANIM_FRAME ref ({ID, FRAME} block); BEGIN/TERMINATE_UPDATE ref.
+    [0x43]=3, [0x75]=2, [0x83]=2, [0x8E]=2, [0x74]=2,
     // M10e: SET_FLAGS ref,flags,mask; SET_COLL_ENABLED ref,on; MOVE_TO ref (blocking)
     // M10h: SET_SPRITESHEET ref,sheet
     [0x44]=4, [0x45]=3, [0x46]=2, [0x47]=3,
@@ -646,6 +650,25 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x3F: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_hidden((INT16)r[0], A_U8(2)); break; }
         case 0x40: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); *(UWORD *)vm_resolve_ref(THIS, A_I16(2)) = hw_actor_dir((INT16)r[0]); break; }
         case 0x41: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_anim_state((INT16)r[0], A_U8(2)); break; }
+        // Actor animation control (slice D). The frame ops take GB's {ID, FRAME}
+        // pseudo-struct; BEGIN/TERMINATE_UPDATE take a ref block whose first word is
+        // the ID (GB reads act_set_pos_t.ID the same way).
+        case 0x43: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));
+                     hw_actor_set_anim_tick((INT16)r[0], A_U8(2)); break; }
+        case 0x75: hw_actor_set_anim_frame((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
+        case 0x83: hw_actor_get_anim_frame((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
+        // BEGIN re-runs the actor's update thread only if the previous one finished
+        // (GB's hscript_update & SCRIPT_TERMINATED test); TERMINATE kills a live one.
+        case 0x8E: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));
+                     const INT16 id = (INT16)r[0];
+                     UBYTE * pc = hw_actor_update_script(id);
+                     UWORD * h = hw_actor_update_handle(id);
+                     if (pc && h && (*h & SCRIPT_TERMINATED)) script_execute(0, pc, h, 0);
+                     break; }
+        case 0x74: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));
+                     UWORD * h = hw_actor_update_handle((INT16)r[0]);
+                     if (h && !(*h & SCRIPT_TERMINATED)) script_terminate((UBYTE)*h);
+                     break; }
         case 0x42: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_emote((INT16)r[0], A_U8(2)); break; }
         case 0x44: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_flags((INT16)r[0], A_U8(2), A_U8(3)); break; }
         case 0x45: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_coll_enabled((INT16)r[0], A_U8(2)); break; }

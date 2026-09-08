@@ -100,6 +100,17 @@ void hw_actor_get_pos(uint16_t* pos);             // 0x3A  writes X,Y back
 int hw_actor_active(int16_t id);                  // M6d: 1 if the actor is active
 uint8_t hw_actor_dir(int16_t id);                 // M6d: the actor's facing (0 down,1 right,2 up,3 left)
 void hw_actor_get_angle(uint16_t* params, int16_t* dest); // 0x86  dir -> BRADS angle
+// Actor animation control (matrix slice D). The frame ops take GB's {ID, FRAME}
+// pseudo-struct off the VM stack and work in OFFSETS within the actor's current
+// animation; anim_tick is GB's MASK (advance when (sys_time & mask) == 0, 255 = paused).
+void hw_actor_set_anim_frame(uint16_t* params);   // 0x75  {ID, FRAME} -> set
+void hw_actor_get_anim_frame(uint16_t* params);   // 0x83  {ID, FRAME} <- get
+void hw_actor_set_anim_tick(int16_t id, uint8_t tick); // 0x43
+// The actor's on-update script, registered on scene load so VM_ACTOR_BEGIN_UPDATE can
+// restart it and VM_ACTOR_TERMINATE_UPDATE can kill it.
+void hw_actor_set_update_script(int16_t id, unsigned char* script);
+unsigned char* hw_actor_update_script(int16_t id);
+uint16_t* hw_actor_update_handle(int16_t id);
 void hw_input_get(uint16_t* dst, uint8_t joyid);  // 0x54  GB-style button bitmask
 // Matrix slice C (input attach/wait). GB's events_update() works off `joy`/`last_joy`
 // and clears a key bit from `joy` when an attached script claims it with

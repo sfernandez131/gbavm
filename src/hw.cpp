@@ -85,6 +85,10 @@ namespace
     constexpr int HALF_H = 80;
     constexpr int MOVE_SPEED = 16;       // actor move-to speed in subpixels/frame (~0.5px)
 
+    // GB's sentinel for "animation stopped" (actor.c ANIM_PAUSED). A mask of 255 can
+    // never satisfy (sys_time & mask) == 0 anyway, but the name is worth keeping.
+    constexpr uint8_t ANIM_PAUSED = 255;
+
     struct Actor
     {
         bool active = false;
@@ -103,7 +107,18 @@ namespace
         unsigned char* hit_script = nullptr; // M10g: run on projectile hit (combined param script)
         uint16_t hit_handle = SCRIPT_TERMINATED; // M10g: refire gate (only when terminated)
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
-        uint16_t anim_timer = 0;         // advances per frame to cycle animation frames
+        // Animation (matrix slice D). GB keeps an absolute `frame` inside the current
+        // animation's [frame_start, frame_end) range; we keep the OFFSET instead, since
+        // the range lives in the sprite def and is picked per dir/moving/state at render.
+        // anim_tick is GB's MASK, not a period: advance when (sys_time & anim_tick) == 0,
+        // with 255 meaning paused. 7 is the engine's long-standing default (the old
+        // `anim_timer >> 3`), so existing projects animate exactly as before.
+        uint8_t anim_frame = 0;
+        uint8_t anim_tick = 7;
+        // M10g-shaped pair for the actor's on-update script, so VM_ACTOR_BEGIN_UPDATE
+        // can restart it and VM_ACTOR_TERMINATE_UPDATE can kill it (slice D).
+        unsigned char* update_script = nullptr;
+        uint16_t update_handle = SCRIPT_TERMINATED;
         bn::optional<bn::sprite_ptr> sprite;   // created lazily on first render
     };
 
@@ -648,14 +663,22 @@ void hw_render(void)
                 const int st = (a.anim_state < GBA_ANIM_STATES) ? a.anim_state : 0;
                 const int anim = st * 8 + (a.dir & 3) + (a.moving ? 4 : 0);
                 const int len = def->anim_len[anim] ? def->anim_len[anim] : 1;
-                const int tick = a.anim_timer >> 3;
-                const int frame = def->anim_start[anim] +
-                    (a.anim_noloop ? ((tick < len) ? tick : len - 1) : (tick % len));
-                a.sprite->set_tiles(item->tiles_item(), frame);
+                // anim_frame is an offset into the CURRENT animation, and switching
+                // dir/moving/state can land on a shorter one - clamp or wrap here
+                // rather than trusting the stored value (GB re-clamps in set_frames).
+                const int off = (a.anim_frame < len) ? a.anim_frame
+                                                     : (a.anim_noloop ? len - 1 : a.anim_frame % len);
+                a.sprite->set_tiles(item->tiles_item(), def->anim_start[anim] + off);
+                // Advance on the tick mask (GB actor.c: (game_time & anim_tick) == 0).
+                if(a.anim_tick != ANIM_PAUSED && (sys_time & a.anim_tick) == 0)
+                {
+                    if(off + 1 < len) a.anim_frame = (uint8_t)(off + 1);
+                    else if(!a.anim_noloop) a.anim_frame = 0;
+                    else a.anim_frame = (uint8_t)off;
+                }
             }
             a.sprite->set_position(to_world_x(a.x), to_world_y(a.y));
             a.sprite->set_visible(a.visible && !sprites_hidden);
-            a.anim_timer++;
             a.moving = false; // re-set next frame if the script moves the actor again
         }
         else if(a.sprite)
@@ -1785,6 +1808,7 @@ void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
     a.moving = false; // a placement is not movement; don't trigger the walk frames
     a.anim_state = 0; // scene placement resets to the default animation state (M10c)
     a.anim_noloop = false;
+    a.anim_frame = 0; // slice D: a placement restarts the animation from its first frame
     a.coll_enabled = true;
 }
 
@@ -1863,7 +1887,7 @@ void hw_actor_set_flags(int16_t id, uint8_t flags, uint8_t mask)
     if(mask & 0x04)
     {
         const bool noloop = (flags & 0x04) != 0;
-        if(a.anim_noloop != noloop) { a.anim_noloop = noloop; a.anim_timer = 0; }
+        if(a.anim_noloop != noloop) { a.anim_noloop = noloop; a.anim_frame = 0; }
     }
     if(mask & 0x08) a.coll_enabled = (flags & 0x08) != 0;
 }
@@ -1893,7 +1917,7 @@ void hw_actor_set_spritesheet(int16_t id, uint8_t sheet)
     if(a.sprite_sheet == (int)sheet) return;
     a.sprite_sheet = (int)sheet;
     a.sprite.reset();
-    a.anim_timer = 0;
+    a.anim_frame = 0;
 }
 
 // M10g: the script fired when a projectile hits this actor (0 = none). Set from
@@ -1913,7 +1937,71 @@ void hw_actor_set_anim_state(int16_t id, uint8_t state)
 {
     if(id < 0 || id >= MAX_ACTORS) return;
     Actor& a = actors[id];
-    if(a.anim_state != state) { a.anim_state = state; a.anim_timer = 0; }
+    if(a.anim_state != state) { a.anim_state = state; a.anim_frame = 0; }
+}
+
+// --- actor animation control (matrix slice D) ---------------------------------
+//
+// VM_ACTOR_SET_ANIM_FRAME / GET_ANIM_FRAME work in OFFSETS within the actor's current
+// animation, which is what GB stores too (`frame - frame_start`). GB reduces a set with
+// `FRAME % (frame_end - frame_start)`; the length here depends on the animation the
+// render pass picks from dir/moving/state, so we wrap against that same length.
+namespace
+{
+    int current_anim_len(int16_t id)
+    {
+        const Actor& a = actors[id];
+        const GbaActorSprite* def = (a.sprite_sheet >= 0)
+            ? gba_global_sprite(a.sprite_sheet)
+            : gba_actor_sprite(current_scene, id);
+        if(!def || !def->anim_len) return 1;
+        const int st = (a.anim_state < GBA_ANIM_STATES) ? a.anim_state : 0;
+        const int anim = st * 8 + (a.dir & 3) + (a.moving ? 4 : 0);
+        const int len = def->anim_len[anim];
+        return len ? len : 1;
+    }
+}
+
+void hw_actor_set_anim_frame(uint16_t* params)
+{
+    const int16_t id = (int16_t)params[0];
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].anim_frame = (uint8_t)((uint16_t)params[1] % (uint16_t)current_anim_len(id));
+}
+
+void hw_actor_get_anim_frame(uint16_t* params)
+{
+    const int16_t id = (int16_t)params[0];
+    if(id < 0 || id >= MAX_ACTORS) { params[1] = 0; return; }
+    params[1] = actors[id].anim_frame;
+}
+
+// The operand is GB's anim_tick MASK (advance when (sys_time & mask) == 0), not a
+// period: 0 = every frame, 15 = every 16, 255 = paused.
+void hw_actor_set_anim_tick(int16_t id, uint8_t tick)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].anim_tick = tick;
+}
+
+// The actor's on-update script, registered on scene load so BEGIN/TERMINATE_UPDATE can
+// restart or kill it. The handle slot is handed to script_execute (the M10g hit-script
+// shape), so it carries the running thread's ID and gains SCRIPT_TERMINATED when it ends.
+void hw_actor_set_update_script(int16_t id, unsigned char* script)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    actors[id].update_script = script;
+    actors[id].update_handle = SCRIPT_TERMINATED;
+}
+
+unsigned char* hw_actor_update_script(int16_t id)
+{
+    return (id >= 0 && id < MAX_ACTORS) ? actors[id].update_script : nullptr;
+}
+
+uint16_t* hw_actor_update_handle(int16_t id)
+{
+    return (id >= 0 && id < MAX_ACTORS) ? &actors[id].update_handle : nullptr;
 }
 
 // M10a: hide/show an actor's sprite (Actor Show / Actor Hide events). A hidden
