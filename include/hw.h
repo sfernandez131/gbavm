@@ -124,6 +124,13 @@ void hw_input_set_suppress(uint16_t mask);
 // 0x57 VM_FADE: advance the screen fade one frame (flags bit 0x02 = fade in, else
 // out). Returns 1 once the fade is complete; the VM blocks the thread until then.
 int hw_fade_step(uint8_t flags);
+// Script camera control (matrix slice E). The {X, Y} block is in the editor's 32-per-pixel
+// subpixels and already carries GB's half-screen offset, so it is a camera CENTRE measured
+// from the scene's top-left. SET_POS jumps and takes both axes off the actor; MOVE_STEP
+// walks toward the target by `speed` subpixels and returns 1 once both axes arrive, then
+// applies `after_lock` (bit 0 = lock X, bit 1 = lock Y; 0 = leave the camera where it is).
+void hw_camera_set_pos(uint16_t* params);
+int hw_camera_move_step(uint16_t* params, uint8_t speed, uint8_t after_lock);
 // M6h: start a camera shake for `frames` frames (view jitters in hw_render, decaying).
 void hw_camera_shake(int frames);
 // 0x90 VM_DISPLAY_TEXT: show `text` (the dialogue string, rendered via Butano's text
