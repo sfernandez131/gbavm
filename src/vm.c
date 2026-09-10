@@ -556,6 +556,9 @@ static const UBYTE vm_args_len[256] = {
     [0x91]=3, [0x92]=4, [0x93]=0, [0x94]=2, [0x96]=6,
     // timers (M6f): PREPARE ctx,bank,addr(ptr); SET ctx,interval; STOP ctx; RESET ctx
     [0x70]=6, [0x71]=2, [0x72]=1, [0x73]=1,
+    // camera control (matrix slice E): MOVE_TO ref,speed,after_lock (blocking);
+    // SET_POS ref. GB numbers these 0x70/0x71, which gbavm spends on the timers.
+    [0x64]=4, [0x65]=2,
     // palettes (M12c): LOAD_PALETTE mask,options (+ inline 8-byte rows per mask bit)
     [0x7C]=2,
     [0x97]=4, // M8d SET_BG_TRANSFORM angle, scale (two i16 = 4 bytes)
@@ -688,6 +691,13 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
                      hw_actor_move_init((INT16)r[0], r[1], r[2]);
                      if (!hw_actor_move_step((INT16)r[0], 2)) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; }
                      break; }
+        // Camera control (slice E). MOVE_TO blocks the thread until both axes arrive,
+        // the same PC-rewind pattern the actor moves and fades use.
+        case 0x64: if (!hw_camera_move_step((uint16_t *)vm_resolve_ref(THIS, A_I16(0)),
+                                            A_U8(2), A_U8(3)))
+                       { THIS->PC -= (INSTRUCTION_SIZE + 4); THIS->waitable = TRUE; }
+                   break;
+        case 0x65: hw_camera_set_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
         case 0x51: hw_set_sprites_visible(A_U8(0)); break;
         case 0x54: hw_input_get((uint16_t *)vm_resolve_ref(THIS, A_I16(1)), A_U8(0)); break;
         // Input attach/wait (slice C). WAIT blocks the thread until the pad changes with

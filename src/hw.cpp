@@ -49,6 +49,16 @@
 #include "bn_regular_bg_tiles_ptr.h"
 #include "gba_user_code.h" // generated: author "Run Custom Code (C++)" snippets (M8e)
 
+// Script-driven camera state (matrix slice E), exported rather than namespace-local so the
+// headless runtime test can read it: LTO strips file-statics, and calling an accessor over
+// the GDB stub is not reliable. Position is in the editor's 32-per-pixel subpixels.
+extern "C" {
+int32_t gba_camera_sub_x = 0;
+int32_t gba_camera_sub_y = 0;
+uint8_t gba_camera_lock_x = 1;   // 1 = that axis follows the lowest active actor
+uint8_t gba_camera_lock_y = 1;
+}
+
 namespace
 {
     // --- input suppression (matrix slice C) ----------------------------------
@@ -461,6 +471,16 @@ namespace
     bn::fixed to_world_x(uint16_t sx) { return bn::fixed(int(sx) / SUBPX - scene_w_px / 2); }
     bn::fixed to_world_y(uint16_t sy) { return bn::fixed(int(sy) / SUBPX - scene_h_px / 2); }
 
+    // (state lives outside this namespace - see gba_camera_* below)
+    // Script-driven camera (matrix slice E). gbavm's camera has always followed the
+    // lowest active actor unconditionally; GB instead has a LOCK per axis, and a script
+    // that positions the camera clears it so the view stays put. Locked is the default,
+    // so a project that never touches the camera behaves exactly as before.
+    //
+    // The position is held in the SAME 32-per-pixel subpixels the editor emits (and that
+    // actor positions use), so a Camera Move To steps by GB's speed without rounding.
+    // The editor has already folded GB's half-screen offset in, making the operand the
+    // camera CENTRE measured from the scene's top-left - which is what to_world_* wants.
     // Clamp a camera centre (world px) so the 240x160 view stays within the scene.
     // A scene no bigger than the screen on an axis stays centred (no scroll).
     bn::fixed clamp_cam(bn::fixed c, int scene_size, int half)
@@ -542,6 +562,11 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     scene_h_px = height_px > 0 ? height_px : 160;
     if(!camera) camera = bn::camera_ptr::create(0, 0);
     else        camera->set_position(0, 0);
+    // Slice E: a new scene starts following the actor again (GB re-inits camera_settings).
+    gba_camera_lock_x = 1;
+    gba_camera_lock_y = 1;
+    gba_camera_sub_x = 0;
+    gba_camera_sub_y = 0;
     // M8d: an affine scene swaps in an affine_bg (Mode-7) instead of the
     // regular bg; the transform op then rotates/scales it. Non-affine scenes
     // are unchanged (gba_create_scene_affine_bg returns nullopt in that case).
@@ -580,6 +605,49 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     }
 }
 
+// --- script camera control (matrix slice E) ------------------------------------
+//
+// The {X, Y} operand block is in the editor's 32-per-pixel subpixels, already carrying
+// GB's half-screen offset, so it is a camera CENTRE from the scene's top-left. We keep
+// the camera in those same units and only convert at render, which is what lets MOVE_TO
+// step by GB's speed exactly.
+
+// VM_CAMERA_SET_POS: jump there and take the camera off the actor on both axes.
+void hw_camera_set_pos(uint16_t* params)
+{
+    gba_camera_sub_x = params[0];
+    gba_camera_sub_y = params[1];
+    gba_camera_lock_x = 0;
+    gba_camera_lock_y = 0;
+}
+
+// VM_CAMERA_MOVE_TO: step toward the target by `speed` subpixels on each axis. Returns 1
+// once BOTH axes have arrived, at which point `after_lock` decides what the camera does
+// next (GB's .CAMERA_LOCK_X = 1, _Y = 2, .CAMERA_UNLOCK = 0 - a locked axis goes back to
+// following the actor). The VM blocks the thread until then, as GB does.
+int hw_camera_move_step(uint16_t* params, uint8_t speed, uint8_t after_lock)
+{
+    const int32_t tx = params[0];
+    const int32_t ty = params[1];
+    // Taking over on the first step, so the camera moves from where it currently is
+    // rather than snapping to whatever the actor-follow left behind.
+    gba_camera_lock_x = 0;
+    gba_camera_lock_y = 0;
+    const int32_t step = speed ? speed : 1; // speed 0 would never arrive
+
+    if(gba_camera_sub_x < tx) gba_camera_sub_x = (gba_camera_sub_x + step > tx) ? tx : gba_camera_sub_x + step;
+    else if(gba_camera_sub_x > tx) gba_camera_sub_x = (gba_camera_sub_x - step < tx) ? tx : gba_camera_sub_x - step;
+
+    if(gba_camera_sub_y < ty) gba_camera_sub_y = (gba_camera_sub_y + step > ty) ? ty : gba_camera_sub_y + step;
+    else if(gba_camera_sub_y > ty) gba_camera_sub_y = (gba_camera_sub_y - step < ty) ? ty : gba_camera_sub_y - step;
+
+    if(gba_camera_sub_x != tx || gba_camera_sub_y != ty) return 0;
+
+    gba_camera_lock_x = (after_lock & 0x01) ? 1 : 0;
+    gba_camera_lock_y = (after_lock & 0x02) ? 1 : 0;
+    return 1;
+}
+
 // M6h: start a camera shake for `frames` frames; hw_render jitters the view (decaying
 // amplitude) until it elapses. Called by the _camera_shake_frames native.
 void hw_camera_shake(int frames)
@@ -606,14 +674,22 @@ void hw_render(void)
             cy = shmup_cy;
         }
         else
-        for(int i = 0; i < MAX_ACTORS; ++i)
         {
-            if(actors[i].active)
+            for(int i = 0; i < MAX_ACTORS; ++i)
             {
-                cx = clamp_cam(to_world_x(actors[i].x), scene_w_px, HALF_W);
-                cy = clamp_cam(to_world_y(actors[i].y), scene_h_px, HALF_H);
-                break;
+                if(actors[i].active)
+                {
+                    cx = clamp_cam(to_world_x(actors[i].x), scene_w_px, HALF_W);
+                    cy = clamp_cam(to_world_y(actors[i].y), scene_h_px, HALF_H);
+                    break;
+                }
             }
+            // Slice E: an axis the script has taken over holds its own position instead
+            // of following. Locking is per axis because GB's .CAMERA_LOCK_X / _Y are.
+            if(!gba_camera_lock_x)
+                cx = clamp_cam(to_world_x((uint16_t)gba_camera_sub_x), scene_w_px, HALF_W);
+            if(!gba_camera_lock_y)
+                cy = clamp_cam(to_world_y((uint16_t)gba_camera_sub_y), scene_h_px, HALF_H);
         }
         // Camera shake (M6h): jitter the view horizontally for shake_frames frames with an
         // amplitude that decays to 0, then settle back on the actor. Runs from hw_render so
