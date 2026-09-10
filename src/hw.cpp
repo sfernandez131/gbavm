@@ -1647,6 +1647,16 @@ void hw_music_play(int track, int loop)
     }
 }
 
+// VM_MUSIC_SETPOS: jump the playing track to a pattern/row. Butano's DMG player takes
+// exactly GB's two operands. Guarded on playing() because set_position asserts when
+// nothing is playing, and an assert halts the console - a script can fire this at any
+// time, including before the scene's track has started.
+void hw_music_setpos(uint8_t pattern, uint8_t row)
+{
+    if(!bn::dmg_music::playing()) return;
+    bn::dmg_music::set_position(pattern, row);
+}
+
 void hw_music_stop(void)
 {
     if(bn::music::playing()) bn::music::stop();          // Maxmod (DirectSound) track
