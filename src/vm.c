@@ -547,6 +547,7 @@ static const UBYTE vm_args_len[256] = {
     // DMG music (M5a): MUSIC_PLAY track,loop; MUSIC_STOP. SFX_PLAY sfx (M5b)
     // M5c: SOUND_MASTERVOL vol
     [0x60]=2, [0x61]=0, [0x66]=1, [0x63]=1,
+    [0x67]=2, // MUSIC_SETPOS pattern, row (slice G)
     // SRAM save (M6a): SAVE_PEEK res,dest,sour,count,slot (9b); SAVE_CLEAR slot
     [0x2E]=9, [0x2F]=1,
     // dialogue text (M4): VM_DISPLAY_TEXT/_EX carry their text inline (variable length)
@@ -735,6 +736,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // DMG music (M5a): play the resolved track (loop per the op) / stop the music.
         case 0x60: hw_music_play(A_U8(0), A_U8(1)); break;
         case 0x61: hw_music_stop(); break;
+        case 0x67: hw_music_setpos(A_U8(0), A_U8(1)); break;
         case 0x66: hw_sfx_play(A_U8(0)); break; // SFX_PLAY (M5b)
         case 0x63: hw_sound_mastervol(A_U8(0)); break; // SOUND_MASTERVOL (M5c)
         // VM_DISPLAY_TEXT (0x90) / VM_DISPLAY_TEXT_EX (0x95): reveal the inline dialogue
