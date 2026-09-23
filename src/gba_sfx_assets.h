@@ -10,4 +10,11 @@ inline const bn::sound_item* gba_sfx(int idx) {
     }
     return nullptr;
 }
+// PSG sound effects (M14f): index -> gbvm sfx_player stream.
+inline const uint8_t* gba_psg_sfx(int idx) {
+    switch(idx) {
+    default: break;
+    }
+    return nullptr;
+}
 #endif

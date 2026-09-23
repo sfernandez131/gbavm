@@ -20,6 +20,7 @@
 // the engine (eject, VM_MUSIC_ROUTINE, SFX).
 
 #include "huge_player.h"
+#include "psg.h"
 
 #include <cstdint>
 
@@ -178,7 +179,6 @@ namespace
         uint8_t step_width4 = 0;                // NR43 bit 3 (7-bit noise)
         const unsigned char* pattern[4] = {};
         channel_t ch[4];
-        uint8_t nr[NR_COUNT] = {};              // the GB register shadow
         bool playing = false;
         bool took_over = false;                 // PSG claimed (M14a: not in the stop's frame)
         uint16_t play_frame = 0;
@@ -187,11 +187,15 @@ namespace
 
     state_t s;
 
-    // NR50, the PSG master volume. Kept outside state_t because it outlives a song: GBVM
-    // sets it to 0x77 once at sound init, and after that only VM_SOUND_MASTERVOL and the
-    // master-volume effect change it - music_sound_cut resets NR51 on every track change
-    // but never touches NR50.
-    uint8_t master_nr50 = 0x77;
+    // The GB register shadow: the machine's sound registers, not the song's, so it lives
+    // outside state_t and outlives a song - the SFX player (M14f) writes the same registers.
+    // Starts as GBVM's sfx_sound_init leaves them: NR50 = 0x77, NR51 = 0xFF. NR50 then only
+    // changes by VM_SOUND_MASTERVOL or the master-volume effect; music_sound_cut resets NR51
+    // on every track change but never NR50.
+    uint8_t gb_nr[NR_COUNT] = {
+        0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 0, 0,
+        0x77, 0xFF,
+    };
 
     void trace(uint8_t reg_id, uint16_t value)
     {
@@ -210,8 +214,7 @@ namespace
     // One GB register write: shadow it, put it on the GBA, trace it.
     void nr_write(uint8_t nr, uint8_t value)
     {
-        s.nr[nr - NR10] = value;
-        if(nr == NR50) master_nr50 = value;
+        gb_nr[nr - NR10] = value;
         uint8_t out = value;
         if(nr == NR30)
         {
@@ -230,7 +233,7 @@ namespace
         trace(nr, value);
     }
 
-    uint8_t nr_read(uint8_t nr) { return s.nr[nr - NR10] | gb_read_mask[nr - NR10]; }
+    uint8_t nr_read(uint8_t nr) { return gb_nr[nr - NR10] | gb_read_mask[nr - NR10]; }
 
     // A channel's registers are 5 apart: NR12, NR17 (NR22), NR1C (NR32), NR21 (NR42).
     uint8_t nrx2(int c) { return uint8_t(NR12 + 5 * c); }
@@ -300,6 +303,27 @@ namespace
 
     // ---- playing notes ---------------------------------------------------------------
 
+    // The GBA half of a wave load: it has two wave-RAM banks, and the CPU can only write the
+    // one that is NOT playing. So stop with bank 1 selected, which makes bank 0 writable,
+    // and write the 16 bytes there; the caller's NR30 = 0x80 then plays bank 0. Leaves
+    // SOUND3CNT_L at 0x40 - stopped - which is what NR30 = 0 means anyway.
+    void write_wave_ram(const unsigned char* src)
+    {
+        reg(SOUND3CNT_L) = 0x40;
+        for(int i = 0; i < 16; i += 2)
+        {
+            reg(WAVE_RAM + uintptr_t(i)) = uint16_t(src[i] | (src[i + 1] << 8));
+        }
+#ifdef HUGE_TRACE
+        for(int i = 0; i < 16; i += 2)                          // still bank 0: read it back
+        {
+            const uint16_t v = reg(WAVE_RAM + uintptr_t(i));
+            huge_wave_readback[i] = uint8_t(v);
+            huge_wave_readback[i + 1] = uint8_t(v >> 8);
+        }
+#endif
+    }
+
     // update_ch3_waveform: copy one 16-byte wave into wave RAM.
     //
     // The GB side of this is the driver's: mute CH3's routing, NR30 = 0, the 16 bytes,
@@ -320,19 +344,7 @@ namespace
         const uint8_t routing = nr_read(NR51);
         nr_write(NR51, routing & 0xBB);
         nr_write(NR30, 0x00);
-        reg(SOUND3CNT_L) = 0x40;                                // GBA: stop on bank 1, write bank 0
-        for(int i = 0; i < 16; i += 2)
-        {
-            reg(WAVE_RAM + uintptr_t(i)) = uint16_t(src[i] | (src[i + 1] << 8));
-        }
-#ifdef HUGE_TRACE
-        for(int i = 0; i < 16; i += 2)                          // still bank 0: read it back
-        {
-            const uint16_t v = reg(WAVE_RAM + uintptr_t(i));
-            huge_wave_readback[i] = uint8_t(v);
-            huge_wave_readback[i + 1] = uint8_t(v >> 8);
-        }
-#endif
+        write_wave_ram(src);
         trace(TRACE_WAVE, wave);
         nr_write(NR30, 0x80);                                   // play bank 0, 32 samples
         nr_write(NR51, routing);
@@ -826,6 +838,14 @@ namespace
     // music_sound_cut does (NR51 = 0xFF), at the persisting master volume, and run the PSG
     // at full strength. Not traced: this is the GBA handover, not the driver - but the
     // shadow is set to match.
+    // Route the PSG out at the shadow's NR51 and NR50, at full strength. Needed whenever
+    // this code starts driving the PSG: Butano only routes it while its gbt player runs.
+    void psg_route_output()
+    {
+        reg(SOUNDCNT_L) = uint16_t((gb_nr[NR51 - NR10] << 8) | gb_nr[NR50 - NR10]);
+        reg(SOUNDCNT_H) = uint16_t((reg(SOUNDCNT_H) & ~3u) | 2u); // PSG output at 100%
+    }
+
     void take_over_psg()
     {
         reg(SOUND1CNT_H) = 0;            // envelope volume 0
@@ -835,10 +855,8 @@ namespace
         reg(SOUND3CNT_L) = 0;            // wave channel stopped (load_wave restarts it)
         reg(SOUND4CNT_L) = 0;
         reg(SOUND4CNT_H) = 0x8000;
-        reg(SOUNDCNT_L) = uint16_t(0xFF00 | master_nr50); // NR51 = all L+R; NR50
-        reg(SOUNDCNT_H) = uint16_t((reg(SOUNDCNT_H) & ~3u) | 2u); // PSG output at 100%
-        s.nr[NR50 - NR10] = master_nr50;
-        s.nr[NR51 - NR10] = 0xFF;
+        gb_nr[NR51 - NR10] = 0xFF;
+        psg_route_output();
     }
 }
 
@@ -908,15 +926,18 @@ void huge_set_position(uint8_t pattern)
 
 void huge_set_master_volume(uint8_t nr50)
 {
-    // VM_SOUND_MASTERVOL is a raw NR50 write on the GB. It persists; while the player owns
-    // the PSG it applies at once, otherwise at the next takeover.
-    master_nr50 = nr50;
-    if(s.playing && s.took_over)
+    // VM_SOUND_MASTERVOL is a raw NR50 write on the GB. It persists; while this code drives
+    // the PSG it applies at once, otherwise when it next routes the output.
+    gb_nr[NR50 - NR10] = nr50;
+    if((s.playing && s.took_over) || psg_sfx_active())
     {
-        s.nr[NR50 - NR10] = nr50;
         reg8(IO + gba_offset[NR50 - NR10]) = nr50;
     }
 }
+
+void huge_set_mute_mask(uint8_t mask) { s.mute_mask = mask; }   // hUGE_mute_mask
+
+void huge_reset_wave(void) { s.current_wave = NO_WAVE; }         // hUGE_reset_wave
 
 void huge_update(void)
 {
@@ -947,3 +968,22 @@ void huge_update(void)
 }
 
 } // extern "C"
+
+// ---- the PSG, for the SFX player (M14f) - see include/psg.h ---------------------------------
+namespace psg
+{
+    void write(uint8_t nr, uint8_t value)
+    {
+        // The SFX stream's "channel 4" group addresses NR50..0xFF28. NR52 is the master
+        // enable, which on the GBA also gates DirectSound, and 0xFF27/28 are unmapped - so
+        // only NR50 and NR51 get through.
+        if(nr < NR10 || nr > NR51 || gba_offset[nr - NR10] == 0) return;
+        nr_write(nr, value);
+    }
+
+    uint8_t read(uint8_t nr) { return nr_read(nr); }
+
+    void load_wave_ram(const uint8_t* src) { write_wave_ram(src); }
+
+    void route_output() { psg_route_output(); }
+}
