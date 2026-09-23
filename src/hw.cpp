@@ -42,6 +42,7 @@
 #include "gba_font_assets.h" // generated: the project's default dialogue font
 #include "gba_music_assets.h" // generated: DMG music track index -> dmg_music_item (M5a)
 #include "huge_player.h" // M14: .uge tracks on the hUGE player
+#include "psg.h" // M14f: PSG sound effects (.vgm, FX Hammer, tones)
 #include "gba_sfx_assets.h" // generated: sound index -> sound_item (M5b)
 #include "gba_emote_assets.h" // generated: emote index -> sprite (M10d)
 #include "gba_tileset_assets.h" // generated: tileset index -> tile data (slice B)
@@ -1626,6 +1627,9 @@ void hw_music_play(int track, int loop)
     // chasing a phantom Wonderful-Toolchain audio bug). Ignore it like GB does.
     (void)loop;
 
+    // vm_music_play clears VM_MUSIC_MUTE's mask before loading the track.
+    psg_music_unmute();
+
     const int backend = gba_music_backend(track);
     if(backend == 2) // hUGE (.uge) - the 4 Game Boy PSG channels, GB Studio's own driver
     {
@@ -1680,6 +1684,22 @@ void hw_music_stop(void)
     if(bn::music::playing()) bn::music::stop();          // Maxmod (DirectSound) track
     if(bn::dmg_music::playing()) bn::dmg_music::stop();   // DMG (gbt-player) track
     huge_stop();                                          // hUGE (.uge) track
+}
+
+// VM_MUSIC_MUTE (M14f): gbvm's vm_music_mute - cut those channels and keep the music
+// driver off them. Only the hUGE player honours it: Butano's gbt player cannot mute a
+// channel.
+void hw_music_mute(uint8_t channels)
+{
+    psg_music_mute(channels);
+}
+
+// VM_SFX_PLAY for a PSG sound (M14f): .vgm, FX Hammer and the Tone / Beep / Crash events,
+// played on the Game Boy channels exactly as gbvm plays them, borrowing the music channels
+// in `mute_mask`. (Over a gbt-player .mod track the two collide - gbt cannot be muted.)
+void hw_sfx_play_psg(int sfx, uint8_t mute_mask, uint8_t priority)
+{
+    psg_sfx_play(gba_psg_sfx(sfx), mute_mask, priority);
 }
 
 // VM_SFX_PLAY (M5b): play the resolved .wav sound on Butano's DirectSound mixer (Maxmod),

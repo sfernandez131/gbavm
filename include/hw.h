@@ -173,6 +173,8 @@ void hw_load_palette(int mask, int options, const unsigned char* rows);
 // --- DMG music (M5a) + sound effects (M5b) ---
 void hw_music_play(int track, int loop);           // 0x60  play DMG track (loop != 0 = loop)
 void hw_music_stop(void);
+void hw_music_mute(uint8_t channels);               // 0x62  mute music channels (M14f)
+void hw_sfx_play_psg(int sfx, uint8_t mute_mask, uint8_t priority); // 0x6C PSG sound effect (M14f)
 // 0x67 VM_MUSIC_SETPOS: jump the playing track to a pattern/row (no-op when the DMG
 // player is idle - Butano asserts on a set_position with nothing playing).
 void hw_music_setpos(uint8_t pattern, uint8_t row);                          // 0x61  stop DMG music

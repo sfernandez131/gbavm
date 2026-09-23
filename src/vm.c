@@ -581,6 +581,9 @@ static const UBYTE vm_args_len[256] = {
     // music routines (M14e): MUSIC_ROUTINE routine, bank, addr(ptr) - gbvm's 0x65, moved
     // because gbavm spends 0x65 on CAMERA_SET_POS
     [0x6B]=6,
+    // PSG sound effects (M14f): SFX_PLAY_PSG sfx, mute_mask, priority; MUSIC_MUTE mask
+    // (gbvm's own number for it)
+    [0x6C]=3, [0x62]=1,
     // Replace Tile at XY: u8 x, u8 y, i16 tileset index, i16 tile index in it.
     [0x9C]=6,
 };
@@ -755,6 +758,8 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x61: hw_music_stop(); break;
         case 0x67: hw_music_setpos(A_U8(0), A_U8(1)); break;
         case 0x66: hw_sfx_play(A_U8(0)); break; // SFX_PLAY (M5b)
+        case 0x6C: hw_sfx_play_psg(A_U8(0), A_U8(1), A_U8(2)); break; // SFX_PLAY, PSG sound (M14f)
+        case 0x62: hw_music_mute(A_U8(0)); break; // MUSIC_MUTE (M14f)
         case 0x63: hw_sound_mastervol(A_U8(0)); break; // SOUND_MASTERVOL (M5c)
         // VM_DISPLAY_TEXT (0x90) / VM_DISPLAY_TEXT_EX (0x95): reveal the inline dialogue
         // text; block (rewind) until fully revealed, then advance. The A-wait is now a

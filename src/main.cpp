@@ -13,6 +13,7 @@
 #include "hw.h"
 #include "gba_link.h"
 #include "huge_player.h" // M14: .uge music on the Game Boy PSG
+#include "psg.h" // M14f: PSG sound effects
 
 #include <cstdint>
 
@@ -60,6 +61,7 @@ int main()
         timers_update();        // fire any timer scripts whose countdown elapsed (M6f)
         music_events_update();  // run scripts attached to music routines (M14e)
         hw_overlay_update();    // animate the dialogue overlay window box (slide in/out)
+        psg_sfx_update();       // step a PSG sound effect at 256 Hz, before the music - gbvm's ISR order (M14f)
         huge_update();          // tick the hUGE player at 64 Hz, when a .uge song is playing (M14)
         hw_render();            // push actor state into sprites
         sys_time++;
