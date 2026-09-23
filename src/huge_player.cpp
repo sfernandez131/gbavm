@@ -15,8 +15,9 @@
 // asserts on a pattern/row seek, and a register log has no rows for VM_MUSIC_SETPOS.
 //
 // Done so far: the tick/row/order machinery and note playback on all four channels
-// (M14b: pulse 1-2; M14c1: wave 3, noise 4), and all 16 effects (M14c2). Subpattern tables
-// are M14c3; the state they need (table pointer and row) is already carried.
+// (M14b: pulse 1-2; M14c1: wave 3, noise 4), all 16 effects (M14c2), and instrument
+// subpattern tables (M14c3). That is the whole driver; what remains of M14 is wiring it to
+// the engine (eject, VM_MUSIC_ROUTINE, SFX).
 
 #include "huge_player.h"
 
@@ -139,6 +140,8 @@ namespace
     };
 
     constexpr int PATTERN_LENGTH = 64;
+    constexpr int TABLE_LENGTH = 32;        // rows the exporter writes per subpattern
+    constexpr uint8_t NO_NOTE = ___;
     constexpr uint8_t FX_TONEPORTA = 3;
     constexpr uint8_t NO_WAVE = 100;        // hUGE_NO_WAVE: forces the first wave to load
 
@@ -149,7 +152,7 @@ namespace
         uint16_t toneporta_target = 0;
         uint8_t note = 0;                       // channel_note
         uint8_t highmask = 0;                   // NRx4 bits: 0x80 trigger, 0x40 length enable
-        const unsigned char* table = nullptr;   // subpattern (M14c3)
+        const unsigned char* table = nullptr;   // the instrument's subpattern, or none
         uint8_t table_row = 0;
     };
 
@@ -227,11 +230,20 @@ namespace
     // be larger, the port has to swap, not shift, to stay faithful.
     uint8_t swap(uint8_t v) { return uint8_t((v << 4) | (v >> 4)); }
 
-    // get_note_period. Effects can ask for notes past the table (arpeggio adds up to 15
-    // semitones to a note up to 71); the GB then reads whatever ROM follows the table,
-    // which is unknowable. The port holds the top note instead - a GBA-side decision, not
-    // a driver rule.
-    uint16_t note_period(uint8_t note) { return note_table[note < LAST_NOTE ? note : LAST_NOTE - 1]; }
+    // get_note_period. The driver indexes the table with `add a` - the note doubled in 8
+    // bits - so it really looks up `note mod 128`, and notes 128..199 play notes 0..71
+    // exactly; the port does the same. The rest land past the table, where the GB reads
+    // whatever ROM follows, which is unknowable, so the port picks a sensible note - a
+    // GBA-side decision, not a driver rule:
+    //   72..127: above the top (an arpeggio adds up to 15 to a note up to 71): the top note.
+    //   200..255: a subpattern offset taking a note below 0, wrapped: the bottom note.
+    uint16_t note_period(uint8_t note)
+    {
+        if(note < LAST_NOTE) return note_table[note];
+        if(note < 128) return note_table[LAST_NOTE - 1];
+        if(note < 128 + LAST_NOTE) return note_table[note - 128];
+        return note_table[0];
+    }
 
     // get_note_poly: a note's noise "polynomial counter" (NR43), RichardULZ's formula. Kept
     // in 8-bit arithmetic with the real SWAP, because notes 64+ wrap `note + 192` and land
@@ -503,12 +515,28 @@ namespace
     // do_effect. Returns false where the driver takes `ret_dont_play_note`: the tick-0
     // caller must then NOT play the row's note (toneporta slides to it instead; note delay
     // plays it later).
-    bool do_effect(int c, uint8_t fx, uint8_t param)
+    //
+    // `from_table` is do_effect.no_set_offset, the entry do_table uses: it jumps to each
+    // effect routine ONE BYTE PAST ITS START. For most effects that byte is the tick test
+    // (`ret z` / `ret nz`), so from a table they run on every tick, tick 0 included. Three
+    // start differently, and what the skip does to them was read off the assembled driver
+    // (GBVM's lib/hUGEDriver.lib), not guessed:
+    //   toneporta  `jr z, .setup` (28 55): the skip executes the operand 0x55, `ld d, l`,
+    //              which the next instruction overwrites - so it slides on every tick and
+    //              never sets its target.
+    //   note delay `jr z, ret_dont_play_note` (28 BD): the operand is `cp l`, whose flags
+    //              the following `cp c` replaces - so it plays the note when tick == param,
+    //              tick 0 included, and never suppresses anything.
+    //   note cut   `cp c` (B9): skipped, so `ret nz` tests do_effect's `or a` on the tick -
+    //              it cuts on tick 0, whatever its param.
+    bool do_effect(int c, uint8_t fx, uint8_t param, bool from_table = false)
     {
         const uint8_t code = fx & 0x0F;
         if((code | param) == 0) return true;
         const uint8_t tick = s.tick;
         const bool tick0 = tick == 0;
+        const bool on_tick0 = tick0 || from_table;      // routines opening with `ret nz`
+        const bool after_tick0 = !tick0 || from_table;  // routines opening with `ret z`
 
         switch(code)
         {
@@ -516,13 +544,13 @@ namespace
             fx_arpeggio(c, param);
             break;
         case 0x1:                                       // porta up
-            if(!tick0) update_channel_freq(c, uint16_t(s.ch[c].period + param), 0);
+            if(after_tick0) update_channel_freq(c, uint16_t(s.ch[c].period + param), 0);
             break;
         case 0x2:                                       // porta down
-            if(!tick0) update_channel_freq(c, uint16_t(s.ch[c].period - param), 0);
+            if(after_tick0) update_channel_freq(c, uint16_t(s.ch[c].period - param), 0);
             break;
         case 0x3:                                       // toneporta
-            if(tick0)
+            if(tick0 && !from_table)
             {
                 s.ch[c].toneporta_target = note_period(s.ch[c].note);
                 return false;
@@ -530,10 +558,10 @@ namespace
             fx_toneporta(c, param);
             break;
         case 0x4:                                       // vibrato
-            if(!tick0) fx_vibrato(c, param);
+            if(after_tick0) fx_vibrato(c, param);
             break;
         case 0x5:                                       // set master volume (global)
-            if(tick0) nr_write(NR50, param);
+            if(on_tick0) nr_write(NR50, param);
             break;
         case 0x6:                                       // call routine: every tick
         {
@@ -545,39 +573,82 @@ namespace
             break;
         }
         case 0x7:                                       // note delay
-            if(tick0) return false;
+            if(tick0 && !from_table) return false;
             if(tick == param) play_note(c);
             break;
         case 0x8:                                       // set pan (global)
-            if(tick0) nr_write(NR51, param);
+            if(on_tick0) nr_write(NR51, param);
             break;
         case 0x9:                                       // set duty
-            if(tick0) fx_set_duty(c, param);
+            if(on_tick0) fx_set_duty(c, param);
             break;
         case 0xA:                                       // volume slide
-            if(tick0) fx_vol_slide(c, param);
+            if(on_tick0) fx_vol_slide(c, param);
             break;
         case 0xB:                                       // position jump (global)
-            if(tick0)
+            if(on_tick0)
             {
-                if(s.row_break == 0) s.row_break = 1;
+                // `or [hl]` assumes A is 0 - true on tick 0. From a table on a later tick,
+                // A holds the tick, so the break is NOT armed and only next_order is set.
+                if((tick | s.row_break) == 0) s.row_break = 1;
                 s.next_order = param;
             }
             break;
         case 0xC:                                       // set volume
-            if(tick0) fx_set_volume(c, param);
+            if(on_tick0) fx_set_volume(c, param);
             break;
         case 0xD:                                       // pattern break (global)
-            if(tick0) s.row_break = param;
+            if(on_tick0) s.row_break = param;
             break;
         case 0xE:                                       // note cut, on tick `param`
-            if(tick == param && !muted(c)) note_cut(c);
+            if(tick == (from_table ? 0 : param) && !muted(c)) note_cut(c);
             break;
         default:                                        // 0xF set speed (global)
-            if(tick0) s.ticks_per_row = param;
+            if(on_tick0) s.ticks_per_row = param;
             break;
         }
         return true;
+    }
+
+    // ---- subpattern tables (M14c3) ---------------------------------------------------
+
+    // do_table: run one row of the channel's table. Tables advance one row per TICK, not
+    // per row, and run on every tick including 0. A table row is a pattern cell with the
+    // instrument slot reused: jump (5 bits: the instrument nibble, bit 4 in the note byte),
+    // a note OFFSET (36 = none, ___ = no change), and an effect.
+    void do_table(int c)
+    {
+        channel_t& ch = s.ch[c];
+        const uint8_t r = ch.table_row++;                   // ld a, [hl] / inc [hl]
+        // Rows past the end: the exporter writes 32, and a table whose last row has no jump
+        // runs off it (the editor can make one). The GB then reads whatever data follows;
+        // the port reads empty rows instead - a GBA-side decision. table_row keeps counting
+        // and wraps at 256 as on the GB, so the table replays from row 0 after that.
+        static constexpr unsigned char empty[3] = { NO_NOTE, 0, 0 };
+        const unsigned char* cell = r < TABLE_LENGTH ? ch.table + r * 3 : empty;
+        uint8_t note = cell[0];
+        const uint8_t fx = cell[1];
+        const uint8_t param = cell[2];
+
+        uint8_t jump = fx & 0xF0;                           // ld a, b / and $F0
+        if(note & 0x80)                                     // bit 7, d: the jump's bit 4
+        {
+            note &= 0x7F;
+            jump |= 1;
+        }
+        jump = swap(jump);
+        if(jump) ch.table_row = uint8_t(jump - 1);          // 1-based; 0 = no jump
+
+        if(note != NO_NOTE)
+        {
+            // An offset from the channel's note, in 8 bits; retune without retriggering.
+            // CH4's update takes the NOTE and makes a poly; the others take a period.
+            const uint8_t n = uint8_t(ch.note + uint8_t(note - 36));
+            const uint8_t mask = ch.highmask & 0x7F;
+            update_channel_freq(c, c == 3 ? n : note_period(n), mask);
+        }
+
+        do_effect(c, fx, param, true);
     }
 
     // ---- tick 0: the row -------------------------------------------------------------
@@ -661,7 +732,7 @@ namespace
         const bool play = do_effect(c, cell.fx, cell.param);
         if(note && play) play_note(c);
 
-        // do_table: M14c3.
+        if(ch.table) do_table(c);
     }
 
     // process_effects: ticks after 0. The effect is skipped outright on a muted channel or
@@ -676,7 +747,7 @@ namespace
                 const cell_t cell = current_row(c);
                 if(cell.param != 0) do_effect(c, cell.fx, cell.param);
             }
-            // do_table: M14c3.
+            if(s.ch[c].table) do_table(c);              // even on a muted channel
         }
     }
 
