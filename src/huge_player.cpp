@@ -57,13 +57,19 @@ constexpr int HUGE_TRACE_MAX = 4096;
 #endif
 __attribute__((section(BN_EWRAM_BSS_SECTION))) huge_trace_t huge_trace[HUGE_TRACE_MAX];
 uint16_t huge_trace_n = 0;
-uint16_t huge_ticks = 0;
 // The last wave written, read back through the emulated bus while its bank is still the
 // writable one. Needed because a debugger cannot check wave RAM: mGBA's GDB stub reads it
 // as zero and does not pass writes through, so this is the only way to see the bytes land.
 uint8_t huge_wave_readback[16];
 }
 #endif
+
+// Driver ticks since the song started (wraps at 65536). Always compiled in: 2 bytes that
+// let gba-studio's CI runtime test prove a .uge track is playing AND at 64 Hz, by walking
+// a known number of frames. A plain global, because GDB reads those reliably.
+extern "C" {
+uint16_t huge_ticks = 0;
+}
 
 namespace
 {
@@ -181,6 +187,12 @@ namespace
 
     state_t s;
 
+    // NR50, the PSG master volume. Kept outside state_t because it outlives a song: GBVM
+    // sets it to 0x77 once at sound init, and after that only VM_SOUND_MASTERVOL and the
+    // master-volume effect change it - music_sound_cut resets NR51 on every track change
+    // but never touches NR50.
+    uint8_t master_nr50 = 0x77;
+
     void trace(uint8_t reg_id, uint16_t value)
     {
 #ifdef HUGE_TRACE
@@ -199,6 +211,7 @@ namespace
     void nr_write(uint8_t nr, uint8_t value)
     {
         s.nr[nr - NR10] = value;
+        if(nr == NR50) master_nr50 = value;
         uint8_t out = value;
         if(nr == NR30)
         {
@@ -809,9 +822,10 @@ namespace
 
     // M14a: claim the whole PSG. Butano's gbt player leaves channels RUNNING when it
     // stops (SOUNDCNT_X still flagged ch2/ch3 after a stop), so silence all four rather
-    // than assume they are quiet, then route them all to both speakers the way GB Studio
-    // sets NR51, and run the PSG at full strength. Not traced: this is the GBA handover,
-    // not the driver - but the shadow is set to match (NR50 = 0x77, NR51 = 0xFF).
+    // than assume they are quiet, then route them all to both speakers as GBVM's
+    // music_sound_cut does (NR51 = 0xFF), at the persisting master volume, and run the PSG
+    // at full strength. Not traced: this is the GBA handover, not the driver - but the
+    // shadow is set to match.
     void take_over_psg()
     {
         reg(SOUND1CNT_H) = 0;            // envelope volume 0
@@ -821,9 +835,9 @@ namespace
         reg(SOUND3CNT_L) = 0;            // wave channel stopped (load_wave restarts it)
         reg(SOUND4CNT_L) = 0;
         reg(SOUND4CNT_H) = 0x8000;
-        reg(SOUNDCNT_L) = 0xFF77;        // all four channels L+R, PSG master volume 7/7
+        reg(SOUNDCNT_L) = uint16_t(0xFF00 | master_nr50); // NR51 = all L+R; NR50
         reg(SOUNDCNT_H) = uint16_t((reg(SOUNDCNT_H) & ~3u) | 2u); // PSG output at 100%
-        s.nr[NR50 - NR10] = 0x77;
+        s.nr[NR50 - NR10] = master_nr50;
         s.nr[NR51 - NR10] = 0xFF;
     }
 }
@@ -842,6 +856,11 @@ void huge_play(const hUGESong_t* song)
 {
     if(!song) return;
 
+    // GBVM's music_load: asking for the track that is already playing does nothing, so
+    // a scene that starts the same music as the last one carries on without a restart.
+    // After a stop the same track starts over.
+    if(s.playing && s.song == song) return;
+
     // One PSG, one owner. Butano's stop is DEFERRED - it queues DMG_MUSIC_STOP and runs it
     // at this frame's bn::core::update() - so the takeover waits for a later frame.
     if(bn::dmg_music::playing()) bn::dmg_music::stop();
@@ -854,6 +873,7 @@ void huge_play(const hUGESong_t* song)
     load_patterns(0);
     s.playing = true;
     s.play_frame = sys_time;
+    huge_ticks = 0;
 }
 
 void huge_stop(void)
@@ -873,6 +893,28 @@ void huge_stop(void)
 }
 
 int huge_playing(void) { return s.playing ? 1 : 0; }
+
+void huge_set_position(uint8_t pattern)
+{
+    // hUGE_set_position is fx_pos_jump entered with A = 0: at the end of the current row,
+    // jump to order `pattern - 1` (one-based, 0 = just the next order), row 0. GBVM's
+    // music_setpos passes only the pattern - its row operand is ignored on hUGE too.
+    if(!s.playing) return;
+    if(s.row_break == 0) s.row_break = 1;
+    s.next_order = pattern;
+}
+
+void huge_set_master_volume(uint8_t nr50)
+{
+    // VM_SOUND_MASTERVOL is a raw NR50 write on the GB. It persists; while the player owns
+    // the PSG it applies at once, otherwise at the next takeover.
+    master_nr50 = nr50;
+    if(s.playing && s.took_over)
+    {
+        s.nr[NR50 - NR10] = nr50;
+        reg8(IO + gba_offset[NR50 - NR10]) = nr50;
+    }
+}
 
 void huge_update(void)
 {
@@ -898,9 +940,7 @@ void huge_update(void)
     {
         s.tick_accum -= CYCLES_PER_SECOND;
         dosound();
-#ifdef HUGE_TRACE
         ++huge_ticks;
-#endif
     }
 }
 

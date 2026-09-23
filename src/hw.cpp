@@ -41,6 +41,7 @@
 #include "gba_avatar_assets.h" // generated: avatar index -> sprite (dialogue portraits)
 #include "gba_font_assets.h" // generated: the project's default dialogue font
 #include "gba_music_assets.h" // generated: DMG music track index -> dmg_music_item (M5a)
+#include "huge_player.h" // M14: .uge tracks on the hUGE player
 #include "gba_sfx_assets.h" // generated: sound index -> sound_item (M5b)
 #include "gba_emote_assets.h" // generated: emote index -> sprite (M10d)
 #include "gba_tileset_assets.h" // generated: tileset index -> tile data (slice B)
@@ -1625,7 +1626,19 @@ void hw_music_play(int track, int loop)
     // chasing a phantom Wonderful-Toolchain audio bug). Ignore it like GB does.
     (void)loop;
 
-    if(gba_music_backend(track) == 1) // Maxmod (DirectSound) tracker music - GBA-native
+    const int backend = gba_music_backend(track);
+    if(backend == 2) // hUGE (.uge) - the 4 Game Boy PSG channels, GB Studio's own driver
+    {
+        // One music track at a time: stop DirectSound music; huge_play() stops the gbt
+        // player itself (and ignores a request for the track already playing, as GBVM).
+        if(bn::music::playing()) bn::music::stop();
+        huge_play(gba_huge_music_track(track));
+        return;
+    }
+    // Any other track replaces a hUGE song too.
+    huge_stop();
+
+    if(backend == 1) // Maxmod (DirectSound) tracker music - GBA-native
     {
         // Playing a song replaces whatever is playing (GB semantics: one music
         // track at a time). play() below replaces same-backend music, but a
@@ -1653,6 +1666,11 @@ void hw_music_play(int track, int loop)
 // time, including before the scene's track has started.
 void hw_music_setpos(uint8_t pattern, uint8_t row)
 {
+    if(huge_playing())
+    {
+        huge_set_position(pattern);   // GBVM on hUGE ignores the row too
+        return;
+    }
     if(!bn::dmg_music::playing()) return;
     bn::dmg_music::set_position(pattern, row);
 }
@@ -1661,6 +1679,7 @@ void hw_music_stop(void)
 {
     if(bn::music::playing()) bn::music::stop();          // Maxmod (DirectSound) track
     if(bn::dmg_music::playing()) bn::dmg_music::stop();   // DMG (gbt-player) track
+    huge_stop();                                          // hUGE (.uge) track
 }
 
 // VM_SFX_PLAY (M5b): play the resolved .wav sound on Butano's DirectSound mixer (Maxmod),
@@ -1680,6 +1699,8 @@ void hw_sound_mastervol(int vol)
     bn::dmg_music::set_volume(v);   // DMG (gbt-player) music
     bn::music::set_volume(v);       // Maxmod (DirectSound) music
     bn::sound::set_master_volume(v); // DirectSound SFX mixer
+    // hUGE plays on the PSG exactly as the GB does, where this op is a raw NR50 write.
+    huge_set_master_volume(uint8_t(vol));
 }
 
 void hw_overlay_update(void)
