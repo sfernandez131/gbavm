@@ -78,6 +78,14 @@ VM_INPUT_EVENT vm_input_events[VM_INPUT_BITS];
 UBYTE vm_input_slots[VM_INPUT_BITS];
 static UWORD vm_input_last;   // held mask on the previous frame (GB's last_joy)
 
+// Music routines (M14e), ported from gbvm's music_manager.c: four script slots, and a
+// four-entry ring of raised routine params between the player and the main loop. When
+// the ring is full the newest param overwrites the oldest, as on the GB.
+#define MUSIC_ROUTINE_QUEUE_LEN 4   // must be a power of 2
+VM_MUSIC_EVENT vm_music_events[VM_MUSIC_EVENTS];
+static UBYTE music_routine_queue[MUSIC_ROUTINE_QUEUE_LEN];
+static UBYTE music_routine_head, music_routine_tail;
+
 #define EXCEPTION_CODE_NONE 0
 
 // Resolve operand index to a typed pointer (negative = stack-relative, positive = global).
@@ -570,6 +578,9 @@ static const UBYTE vm_args_len[256] = {
     // input attach/wait (slice C): WAIT mask(u16); ATTACH mask(u16), slot(u8);
     // CONTEXT_PREPARE slot, bank, addr(ptr); DETACH mask(u16)
     [0x52]=2, [0x53]=3, [0x55]=6, [0x5F]=2,
+    // music routines (M14e): MUSIC_ROUTINE routine, bank, addr(ptr) - gbvm's 0x65, moved
+    // because gbavm spends 0x65 on CAMERA_SET_POS
+    [0x6B]=6,
     // Replace Tile at XY: u8 x, u8 y, i16 tileset index, i16 tile index in it.
     [0x9C]=6,
 };
@@ -714,6 +725,12 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x5F: { UWORD m = A_U16(0);
                      for (UBYTE i = 0; i < VM_INPUT_BITS; i++) if (m & (1u << i)) vm_input_slots[i] = 0;
                      break; }
+        // MUSIC_ROUTINE routine, bank, addr (M14e): attach a script to music-event slot
+        // `routine & 3` (gbvm vm_music_routine - it leaves the slot's handle alone). gbvm's
+        // opcode is 0x65, which gbavm already uses for CAMERA_SET_POS.
+        case 0x6B: { VM_MUSIC_EVENT * ev = &vm_music_events[A_U8(0) & 0x03];
+                     ev->bank = A_U8(1); ev->pc = A_PTR(2);
+                     break; }
         // CONTEXT_PREPARE slot, bank, addr: bind a 1-based slot to a script.
         case 0x55: { UBYTE slot = A_U8(0);
                      if (slot != 0 && slot <= VM_INPUT_BITS) {
@@ -831,6 +848,9 @@ void script_runner_init(UBYTE reset) {
         memset(vm_input_events, 0, sizeof(vm_input_events));
         memset(vm_input_slots, 0, sizeof(vm_input_slots));
         vm_input_last = 0;
+        // M14e: music routine scripts too (GB music_init_events(FALSE) on scene change).
+        memset(vm_music_events, 0, sizeof(vm_music_events));
+        music_routine_head = music_routine_tail = 0;
         hw_input_set_suppress(0);
     }
     UWORD * base_addr = &script_memory[VM_HEAP_SIZE];
@@ -924,6 +944,32 @@ void input_events_update(void) {
     }
     hw_input_set_suppress(suppress);
     vm_input_last = held;
+}
+
+// M14e: hUGETrackerRoutine (the player's routine-effect callback) lands here with the
+// effect param, on tick 0 only - gbvm's routine, queue discipline and all.
+void music_routine_raise(UBYTE param) {
+    music_routine_head = (UBYTE)((music_routine_head + 1u) & (MUSIC_ROUTINE_QUEUE_LEN - 1u));
+    if (music_routine_head == music_routine_tail)
+        music_routine_tail = (UBYTE)((music_routine_tail + 1u) & (MUSIC_ROUTINE_QUEUE_LEN - 1u));
+    music_routine_queue[music_routine_head] = param;
+}
+
+// M14e: gbvm's music_events_update. Drain the queue, running slot `param & 3`'s script
+// with `param >> 4` as its argument - but only if its last run has finished, else the
+// event is dropped. A slot with no script ends this frame's drain (gbvm returns there;
+// the unscripted event is consumed and the rest wait for the next frame). Skipped while
+// the VM is locked, where gbvm skips it too: events then wait in the queue.
+void music_events_update(void) {
+    if (vm_lock_state) return;
+    while (music_routine_head != music_routine_tail) {
+        music_routine_tail = (UBYTE)((music_routine_tail + 1u) & (MUSIC_ROUTINE_QUEUE_LEN - 1u));
+        const UBYTE data = music_routine_queue[music_routine_tail];
+        VM_MUSIC_EVENT * ev = &vm_music_events[data & 0x03];
+        if (!ev->pc) return;
+        if (ev->handle == 0 || (ev->handle & SCRIPT_TERMINATED))
+            script_execute(ev->bank, ev->pc, &ev->handle, 1, (int)(data >> 4));
+    }
 }
 
 // M6f: advance every armed timer one frame; when a slot's countdown elapses, run its

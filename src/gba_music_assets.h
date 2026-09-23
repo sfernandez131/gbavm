@@ -4,7 +4,8 @@
 #include "bn_dmg_music_item.h"
 #include "bn_music_item.h"
 #include "bn_dmg_music_items_song_template.h"
-// backend per track index: 0 = DMG (gbt-player PSG), 1 = Maxmod (DirectSound).
+#include "hUGEDriver.h"
+// backend per track index: 0 = DMG (gbt-player PSG), 1 = Maxmod (DirectSound), 2 = hUGE (.uge).
 inline int gba_music_backend(int idx) {
     switch(idx) {
     default: break;
@@ -19,6 +20,12 @@ inline const bn::dmg_music_item* gba_dmg_music_track(int idx) {
     return nullptr;
 }
 inline const bn::music_item* gba_maxmod_music_track(int idx) {
+    switch(idx) {
+    default: break;
+    }
+    return nullptr;
+}
+inline const hUGESong_t* gba_huge_music_track(int idx) {
     switch(idx) {
     default: break;
     }

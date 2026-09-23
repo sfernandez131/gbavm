@@ -173,6 +173,16 @@ void input_events_update(void);
 typedef struct { UBYTE bank; UBYTE * pc; UWORD handle; } VM_INPUT_EVENT;
 extern VM_INPUT_EVENT vm_input_events[VM_INPUT_BITS];
 extern UBYTE vm_input_slots[VM_INPUT_BITS];
+// M14e: music routines - GB Studio's "Music Routine" event, ported from gbvm's
+// music_manager.c. The hUGE player queues the routine effect's param (music_routine_raise,
+// tick 0 only); music_events_update() (main loop, skipped while the VM is locked) runs the
+// script attached to slot `param & 3`, passing `param >> 4` as its one argument.
+// vm_music_events is exported for the headless runtime test.
+#define VM_MUSIC_EVENTS 4
+typedef struct { UBYTE bank; UBYTE * pc; UWORD handle; } VM_MUSIC_EVENT;
+extern VM_MUSIC_EVENT vm_music_events[VM_MUSIC_EVENTS];
+void music_routine_raise(UBYTE param);
+void music_events_update(void);
 // Pending VM exception + its payload (read by the main loop after RUNNER_EXCEPTION).
 UBYTE vm_get_exception(void);
 UWORD vm_get_exception_param(void);
