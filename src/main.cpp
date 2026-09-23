@@ -58,6 +58,7 @@ int main()
         gba_check_triggers();   // fire a trigger zone's script when the player enters it (M6b)
         if(!dialogue_was_open) gba_check_interact(); // A + facing a placed actor -> interact (M6c)
         timers_update();        // fire any timer scripts whose countdown elapsed (M6f)
+        music_events_update();  // run scripts attached to music routines (M14e)
         hw_overlay_update();    // animate the dialogue overlay window box (slide in/out)
         huge_update();          // tick the hUGE player at 64 Hz, when a .uge song is playing (M14)
         hw_render();            // push actor state into sprites

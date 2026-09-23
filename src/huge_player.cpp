@@ -844,12 +844,14 @@ namespace
 
 extern "C" {
 
-// The callback behind hUGE's "call routine" effect - what GB Studio's VM_MUSIC_ROUTINE
-// listens to. Wired to music events in M14e; until then routines are raised into nothing.
+// The callback behind hUGE's "call routine" effect, which every song's routine table
+// points at. As in gbvm's music_manager.c it queues only on tick 0 - the effect runs on
+// every tick - and only the effect param (the low byte), dropping the channel; the VM's
+// music_events_update then runs the script attached to that routine (M14e).
 void hUGETrackerRoutine(unsigned char tick, unsigned int param)
 {
-    (void)tick;
-    (void)param;
+    if(tick) return;
+    music_routine_raise(uint8_t(param));
 }
 
 void huge_play(const hUGESong_t* song)
