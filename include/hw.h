@@ -179,6 +179,7 @@ void hw_sfx_play_psg(int sfx, uint8_t mute_mask, uint8_t priority); // 0x6C PSG 
 // player is idle - Butano asserts on a set_position with nothing playing).
 void hw_music_setpos(uint8_t pattern, uint8_t row);                          // 0x61  stop DMG music
 void hw_sfx_play(int sfx);                          // 0x66  play a .wav sound effect
+uint16_t hw_rng_seed(void);                        // 0x6D  RANDOMIZE's seed (gbs2 G1)
 void hw_sound_mastervol(int vol);                  // 0x63  set the master volume (0..8)
 
 // --- projectiles (M10f) ---

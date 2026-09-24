@@ -16,6 +16,7 @@
 #include "bn_fixed.h"
 #include "bn_keypad.h"
 #include "bn_optional.h"
+#include "bn_timer.h"
 #include "bn_sprite_ptr.h"
 #include "bn_sprite_tiles_item.h"
 #include "bn_regular_bg_ptr.h"
@@ -518,8 +519,22 @@ namespace
     }
 }
 
+// VM_RANDOMIZE (gbs2 slice G1): gbvm seeds its RNG with `DIV + game_time * 256` - the
+// low byte of the GB's fast free-running divider, plus the low byte of the frame count
+// shifted up. The GBA has no DIV register, so a Butano timer, started at boot, stands in
+// for it; sys_time is gbavm's frame count. As on the GB, what makes the seed vary is when
+// the player pressed Start.
+namespace { bn::optional<bn::timer> rng_timer; }
+
+uint16_t hw_rng_seed(void)
+{
+    const uint16_t div = rng_timer ? uint16_t(rng_timer->elapsed_ticks() & 0xFF) : 0;
+    return uint16_t(div + (sys_time & 0xFF) * 256);
+}
+
 void hw_init(void)
 {
+    rng_timer.emplace();
     bn::bg_palettes::set_transparent_color(bn::color(2, 4, 12));
     // Audio levels. Butano's DMG master volume defaults to 25% (QUARTER) - raise it to
     // FULL so project music is clearly audible. Also set the DirectSound master volume so
