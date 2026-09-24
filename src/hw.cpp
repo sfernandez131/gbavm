@@ -120,6 +120,9 @@ namespace
         unsigned char* hit_script = nullptr; // M10g: run on projectile hit (combined param script)
         uint16_t hit_handle = SCRIPT_TERMINATED; // M10g: refire gate (only when terminated)
         bool moving = false;             // moved this frame (set by hw_actor_set_pos)
+        // gbs2 G2: sprite bounding box relative to the position, in subpixels (GB Studio's
+        // rect16_t, right/bottom inclusive). Default: GB Studio's 16x16 box.
+        int16_t b_left = 0, b_right = 16 * SUBPX - 1, b_top = 0, b_bottom = 16 * SUBPX - 1;
         // Animation (matrix slice D). GB keeps an absolute `frame` inside the current
         // animation's [frame_start, frame_end) range; we keep the OFFSET instead, since
         // the range lives in the sprite def and is picked per dir/moving/state at render.
@@ -1046,6 +1049,44 @@ namespace
         p.moving = plat_vel_y != 0;
     }
 
+    // --- gbs2 G2: POINTNCLICK cursor, ported from gbvm's src/states/pointnclick.c ---
+    // The player is a cursor: the d-pad moves it freely in 8 directions (no tile
+    // collision) and it is clamped to the scene. Hover and A are in gba_scene.cpp,
+    // which holds the triggers and actor scripts.
+    //
+    // The arithmetic is gbvm's, in its own widths. The cursor moves by angle with the
+    // shared sine table (upoint_translate_angle). The clamp compares `pos + bounds`
+    // against the scene size as SDCC does it, where int is 16 bits: an unsigned 16-bit
+    // sum - so moving past the top or left edge wraps to a huge value, which is what
+    // trips the clamp and pins the box's edge to the scene's.
+    void pointnclick_update()
+    {
+        Actor& p = actors[0];
+        if(!p.active) return;
+        uint8_t angle = 0;
+        bool moving = true;
+        if(k_left_held())       angle = k_up_held() ? 224 : (k_down_held() ? 160 : 192);
+        else if(k_right_held()) angle = k_up_held() ? 32 : (k_down_held() ? 96 : 64);
+        else if(k_up_held())    angle = 0;
+        else if(k_down_held())  angle = 128;
+        else moving = false;
+        if(moving)
+        {
+            p.x = uint16_t(p.x + (int16_t(int(vm_sine(angle)) * p.move_speed) >> 7));
+            p.y = uint16_t(p.y - (int16_t(int(vm_sine(uint8_t(angle + 64))) * p.move_speed) >> 7));
+            const uint16_t w = uint16_t(scene_w_px * SUBPX);
+            const uint16_t h = uint16_t(scene_h_px * SUBPX);
+            if(uint16_t(p.x + p.b_left) > w)       p.x = uint16_t(-p.b_left);
+            else if(uint16_t(p.x + p.b_right) > w) p.x = uint16_t(w - (p.b_right + 1));
+            if(uint16_t(p.y + p.b_top) > h)        p.y = uint16_t(-p.b_top);
+            else if(uint16_t(p.y + p.b_bottom) > h) p.y = uint16_t(h - (p.b_bottom + 1));
+        }
+        // A cursor's animation is fixed, not directional: gbvm's ANIM_CURSOR (0) or
+        // ANIM_CURSOR_HOVER (1), which in the 8-per-state layout are the idle-down and
+        // idle-right slots. hw_set_cursor_hover picks between them.
+        p.moving = false;
+    }
+
     // --- M13f SHMUP scroll controller (state hoisted to the camera block
     // above so hw_load_scene / hw_render can see it) ---------------------
     void shmup_update()
@@ -1354,6 +1395,36 @@ int hw_interact_actor(void)
     return -1;
 }
 
+// gbs2 G2: bounding boxes, and the point-and-click hooks gba_scene.cpp uses.
+void hw_actor_set_bounds(int16_t id, const short* b)
+{
+    if(id < 0 || id >= MAX_ACTORS) return;
+    Actor& a = actors[id];
+    if(b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0)
+    {
+        a.b_left = 0; a.b_right = 16 * SUBPX - 1; a.b_top = 0; a.b_bottom = 16 * SUBPX - 1;
+        return;
+    }
+    a.b_left = b[0]; a.b_right = b[1]; a.b_top = b[2]; a.b_bottom = b[3];
+}
+
+int hw_actor_abs_bounds(int16_t id, uint16_t* left, uint16_t* right, uint16_t* top, uint16_t* bottom, int* collide)
+{
+    if(id < 0 || id >= MAX_ACTORS) return 0;
+    const Actor& a = actors[id];
+    if(!a.active) return 0;
+    *left = uint16_t(a.x + a.b_left);
+    *right = uint16_t(a.x + a.b_right);
+    *top = uint16_t(a.y + a.b_top);
+    *bottom = uint16_t(a.y + a.b_bottom);
+    *collide = a.coll_enabled ? 1 : 0;
+    return 1;
+}
+
+void hw_set_cursor_hover(int hover) { actors[0].dir = hover ? 1 : 0; }
+
+int hw_a_pressed(void) { return (!text_showing && k_a_pressed()) ? 1 : 0; }
+
 // M6c: 1 while a dialogue box is on screen. The main loop samples this at the start of a
 // frame so the A press that dismisses a dialogue isn't also read as a fresh interaction
 // (script_runner_update clears text_showing mid-frame, before gba_check_interact runs).
@@ -1368,6 +1439,11 @@ void hw_player_update(void)
     // still use the top-down controller below.
     if(gba_current_scene_type == 1) { platform_update(); return; }
     if(gba_current_scene_type == 3) { shmup_update(); return; }   // M13f SHMUP
+    if(gba_current_scene_type == 4)                               // gbs2 G2 POINTNCLICK
+    {
+        if(!vm_is_locked()) pointnclick_update();                 // gbvm: no state update while locked
+        return;
+    }
     Actor& p = actors[0];
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.

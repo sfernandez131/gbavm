@@ -183,6 +183,8 @@ typedef struct { UBYTE bank; UBYTE * pc; UWORD handle; } VM_MUSIC_EVENT;
 extern VM_MUSIC_EVENT vm_music_events[VM_MUSIC_EVENTS];
 void music_routine_raise(UBYTE param);
 void music_events_update(void);
+// gbs2 G2: 1 while a script holds the VM lock (gbvm VM_ISLOCKED).
+UBYTE vm_is_locked(void);
 // Pending VM exception + its payload (read by the main loop after RUNNER_EXCEPTION).
 UBYTE vm_get_exception(void);
 UWORD vm_get_exception_param(void);
