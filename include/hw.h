@@ -67,6 +67,15 @@ void hw_actor_deactivate(int16_t actor);          // 0x33
 // Place an actor at its initial position + facing on scene load (activates it,
 // no movement inference). Called from gba_load_scene before scripts run.
 void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir);
+// gbs2 G2: an actor's bounding box (subpixels, relative to its position; see GbaActorInit).
+void hw_actor_set_bounds(int16_t id, const short* bounds);
+// gbs2 G2 point-and-click: the bounding box in absolute subpixels, computed in 16 bits as
+// gbvm does; returns 0 for an inactive actor. `collide` is the actor's collision flag.
+int hw_actor_abs_bounds(int16_t id, uint16_t* left, uint16_t* right, uint16_t* top, uint16_t* bottom, int* collide);
+// gbs2 G2 point-and-click: show the cursor (0) or the hover cursor (1).
+void hw_set_cursor_hover(int hover);
+// gbs2 G2: 1 when the A button went down this frame and no dialogue is open.
+int hw_a_pressed(void);
 
 // --- actor movement (VM_ACTOR_MOVE_TO_* / SET_DIR) ---
 // GB Studio's "Move To" compiles to MOVE_TO_INIT (set destination) then per-axis

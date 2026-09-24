@@ -954,6 +954,8 @@ void input_events_update(void) {
     vm_input_last = held;
 }
 
+UBYTE vm_is_locked(void) { return vm_lock_state ? 1 : 0; }
+
 // M14e: hUGETrackerRoutine (the player's routine-effect callback) lands here with the
 // effect param, on tick 0 only - gbvm's routine, queue discipline and all.
 void music_routine_raise(UBYTE param) {
