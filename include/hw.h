@@ -58,6 +58,14 @@ int hw_dialogue_active(void);
 // Move the player (actor 0) from the live d-pad each frame when player movement is
 // enabled. Called from the main loop before hw_render.
 void hw_player_update(void);
+// gbs2 G3b: the first collidable actor (runtime index) whose bounding box overlaps the
+// player's, or -1 (gbvm's actor_overlapping_player).
+int hw_actor_overlapping_player(void);
+// gbs2 G3b: run the hit of the actor the player's update registered this frame - the
+// scene's player-hit script and the actor's On Hit: Player script - then count down the
+// invincibility frames (gbvm's actors_handle_player_collision). Called from the main loop
+// once a frame, after hw_render, locked or not.
+void hw_player_collision_update(void);
 // Animate the dialogue overlay window box one frame (slide in/out). Called from the
 // main loop each frame, like hw_player_update; independent of the VM so the box can
 // finish sliding out after the script that hid it has ended.

@@ -64,6 +64,7 @@ int main()
         psg_sfx_update();       // step a PSG sound effect at 256 Hz, before the music - gbvm's ISR order (M14f)
         huge_update();          // tick the hUGE player at 64 Hz, when a .uge song is playing (M14)
         hw_render();            // push actor state into sprites
+        hw_player_collision_update(); // run an actor's On Hit: Player, last in the frame as gbvm (gbs2 G3b)
         sys_time++;
         bn::core::update();
     }

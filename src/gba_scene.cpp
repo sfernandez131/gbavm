@@ -132,18 +132,12 @@ static void gba_pointnclick_update(const GbaScene & s)
         }
     }
 
-    // actor_overlapping_player: the first collidable actor whose box overlaps the cursor's
-    // (gbvm compares the four edges in 16-bit unsigned arithmetic, as here).
+    // actor_overlapping_player: the first collidable actor whose box overlaps the cursor's.
+    const int hit = hw_actor_overlapping_player();
     const GbaActorInit * hit_actor = nullptr;
-    for(unsigned int i = 0; i < s.actors_init_count && !hit_actor; ++i)
+    for(unsigned int i = 0; hit > 0 && i < s.actors_init_count && !hit_actor; ++i)
     {
-        const GbaActorInit & ai = s.actors_init[i];
-        if(ai.index == 0) continue;
-        uint16_t al, ar, at, ab;
-        int acoll;
-        if(!hw_actor_abs_bounds(ai.index, &al, &ar, &at, &ab, &acoll) || !acoll) continue;
-        if(al > r || ar < l || at > b || ab < t) continue;
-        hit_actor = &ai;
+        if(s.actors_init[i].index == (unsigned char)hit) hit_actor = &s.actors_init[i];
     }
 
     const bool hover_trigger = hit_trigger >= 0 && s.triggers[hit_trigger].script;
@@ -184,6 +178,9 @@ extern "C" void gba_check_triggers(void)
 // NPC interaction (M6c): each frame, if the player pressed A while facing an adjacent
 // placed actor (no dialogue up), run that actor's interact script as a new thread. hw
 // returns the runtime actor index; map it back to its GbaActorInit to find the script.
+// gbs2 G3b: an actor with a collision group is never interacted with - its script's
+// argument-0 section is its On Hit: Player tab, which runs when the player touches it
+// (hw_player_collision_update). gbvm's TOPDOWN, PLATFORM and ADVENTURE skip it the same way.
 extern "C" void gba_check_interact(void)
 {
     // POINTNCLICK interacts through the cursor instead (gba_pointnclick_update).
@@ -194,12 +191,11 @@ extern "C" void gba_check_interact(void)
     for(unsigned int i = 0; i < s.actors_init_count; ++i)
     {
         const GbaActorInit & ai = s.actors_init[i];
-        if(ai.index == (unsigned char)actor && ai.interact)
+        if(ai.index == (unsigned char)actor)
         {
-            // Pass parameter 0 (M10g): an actor with a collision group compiles
-            // its interact + On Hit tabs into ONE script that branches on thread
-            // arg 0 (GET_TLOCAL) - 0 selects the interact section. Plain interact
-            // scripts never read the arg, so this is safe for them too.
+            if(!ai.interact || (ai.collision_group & 0x0F)) return;
+            // Pass parameter 0 (M10g), as gbvm does. Plain interact scripts never
+            // read the arg.
             script_execute(0, ai.interact, nullptr, 1, 0);
             return;
         }

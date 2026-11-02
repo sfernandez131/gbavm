@@ -572,6 +572,7 @@ extern int16_t gba_bg_angle; // defined below (M8d)
 extern int16_t gba_bg_spin;  // defined below (M8d): affine auto-spin, deg/frame x256
 extern int16_t gba_bg_scale; // defined below (M8d): affine scale, x256 (256 = 1.0)
 namespace { void plat_scene_reset(); } // defined with the platformer below (gbs2 G3)
+namespace { void player_collision_reset(); } // defined with the player collision below (gbs2 G3b)
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
 {
@@ -625,6 +626,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
         actors[i].sprite_sheet = -1;    // back to the scene's sheet (M10h)
     }
     plat_scene_reset();
+    player_collision_reset();
 }
 
 // --- script camera control (matrix slice E) ------------------------------------
@@ -962,8 +964,39 @@ void hw_set_player_move(uint8_t enabled)
     player_move_enabled = (enabled != 0);
 }
 
+// gbs2 G3b: frames of invincibility left after an actor hit the player (gbvm's
+// player_iframes). Exported for GDB / runtime-test checks.
+extern "C" {
+uint8_t player_iframes = 0;
+}
+
 namespace
 {
+    // --- gbs2 G3b: player-vs-actor collision, ported from gbvm's actor.c ---
+    // The player's state update registers the actor it overlaps
+    // (player_register_collision_with), and once a frame the main loop runs that
+    // actor's hit (hw_player_collision_update). The actor is a runtime index, -1 none.
+    constexpr uint8_t PLAYER_HURT_IFRAMES = 20;
+    constexpr uint8_t COLLISION_GROUP_MASK = 0x0F; // the group bits (player 1, "1"-"3" 2/4/8)
+    int player_collision_actor = -1;
+
+    // gbvm's actors_init: a scene starts with nothing registered and no invincibility.
+    void player_collision_reset()
+    {
+        player_collision_actor = -1;
+        player_iframes = 0;
+    }
+
+    // The actor check in gbvm's state updates: the first actor the player overlaps is
+    // registered when it has a collision group. Like the rest of gbvm's state update,
+    // it is skipped while the VM is locked.
+    void register_player_collision()
+    {
+        if(vm_is_locked()) return;
+        const int hit = hw_actor_overlapping_player();
+        if(hit > 0 && (actors[hit].collision_group & COLLISION_GROUP_MASK)) player_collision_actor = hit;
+    }
+
     // M13b runtime state (velocities in GB Q8.8 units; positions in GBA 32/px
     // subpixels). GB integrates VEL_TO_SUBPX(v) = (v>>8)<<1 GB-subpixels
     // (16/px); GBA subpixels are 32/px, so the delta doubles: (v>>8)<<2.
@@ -1165,6 +1198,9 @@ namespace
 
         shmup_cam_x = (int16_t)cam_x_px;
         shmup_cam_y = (int16_t)cam_y_px;
+
+        // gbs2 G3b: gbvm's shmup checks actors on even frames (triggers on odd ones).
+        if((sys_time & 1) == 0) register_player_collision();
     }
 
     // state_enter_jump parity: upward velocity, hold-boost setup (+ run boost
@@ -1496,6 +1532,9 @@ namespace
         // ended in.
         const uint8_t start = plat_state;
         platform_step(p);
+        // gbs2 G3b: the actor check that closes gbvm's move_and_collide. Every state's
+        // pass includes it but BLANK's, which is Y-only.
+        if(start != 7) register_player_collision();
         if(plat_state != start) plat_change_state(start, plat_state, false);
         plat_next_state = plat_state;
     }
@@ -1615,6 +1654,56 @@ void hw_player_update(void)
     else if(k_left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
     if(k_up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
     else if(k_down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
+    // gbs2 G3b: the actor check of gbvm's TOPDOWN and ADVENTURE updates. gbvm's TOPDOWN
+    // makes it each time the player lands on a grid tile; gbavm moves freely, so it
+    // checks every frame.
+    register_player_collision();
+}
+
+// gbs2 G3b: gbvm's actor_overlapping_player - the first actor (runtime index) whose box
+// overlaps the player's, or -1. Actors with collisions off are skipped, and the edges
+// compare in 16-bit unsigned arithmetic as in gbvm (hw_actor_abs_bounds). gbvm walks its
+// active list in activation order; gbavm walks the actor slots in index order, which
+// matches it until a script reactivates an actor.
+int hw_actor_overlapping_player(void)
+{
+    uint16_t l, r, t, b;
+    int collide;
+    if(!hw_actor_abs_bounds(0, &l, &r, &t, &b, &collide)) return -1;
+    for(int i = 1; i < MAX_ACTORS; ++i)
+    {
+        uint16_t al, ar, at, ab;
+        int acoll;
+        if(!hw_actor_abs_bounds((int16_t)i, &al, &ar, &at, &ab, &acoll) || !acoll) continue;
+        if(al > r || ar < l || at > b || ab < t) continue;
+        return i;
+    }
+    return -1;
+}
+
+// gbs2 G3b: gbvm's actors_handle_player_collision. An actor registered this frame with
+// a collision group runs the scene's player-hit script with that group as its argument,
+// then its own script with 0 (its On Hit: Player tab), and the player is invincible for
+// PLAYER_HURT_IFRAMES frames. While invincible, the frames count down instead, touching
+// or not. Neither script is gated on a previous run (gbvm passes no thread handle).
+__attribute__((noinline)) void hw_player_collision_update(void)
+{
+    const int hit = player_collision_actor;
+    player_collision_actor = -1;
+    if(player_iframes == 0 && hit >= 0)
+    {
+        const uint8_t group = actors[hit].collision_group & COLLISION_GROUP_MASK;
+        if(group)
+        {
+            if(actors[0].hit_script) script_execute(0, actors[0].hit_script, nullptr, 1, (int)group);
+            if(actors[hit].hit_script) script_execute(0, actors[hit].hit_script, nullptr, 1, 0);
+            player_iframes = PLAYER_HURT_IFRAMES;
+        }
+    }
+    else if(player_iframes != 0)
+    {
+        player_iframes--;
+    }
 }
 
 // M8d VM_SET_BG_TRANSFORM: rotate + scale the affine scene background.
