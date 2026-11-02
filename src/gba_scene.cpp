@@ -68,6 +68,7 @@ void gba_load_scene(unsigned int idx)
         const GbaActorInit & ai = s.actors_init[i];
         if(ai.index == 0 && keep_player) hw_actor_place(0, keep[1], keep[2], keep_dir);
         else hw_actor_place(ai.index, ai.x, ai.y, ai.dir);
+        hw_actor_set_bounds(ai.index, ai.bounds);   // gbs2 G2: sprite bounding box
         // Authored movement speed (M10a); 0 keeps the engine default.
         if(ai.move_speed) hw_actor_set_move_speed(ai.index, ai.move_speed);
         // Authored collision group (M10f; the player row carries 0x01).
@@ -103,9 +104,63 @@ void gba_load_scene(unsigned int idx)
 // Trigger zones (M6b): each frame, fire the script of the trigger the player just
 // entered. current_trigger debounces it (re-runs only after leaving + re-entering);
 // the script runs as a new thread, like the scene init (it may switch scene, save, etc.).
+// gbs2 G2 POINTNCLICK: gbvm's pointnclick_update, the part after the cursor moves
+// (hw_player_update did that). Triggers do not fire by walking into them; instead the
+// cursor's box picks out the first trigger its tiles overlap (trigger_at_intersection)
+// and the first collidable actor it overlaps (actor_overlapping_player), shows the hover
+// cursor over either one that has a script, and A runs it - the actor's with argument 0,
+// else the trigger's with argument 1 (trigger_interact). Skipped while the VM is locked,
+// where gbvm skips its whole state update.
+static void gba_pointnclick_update(const GbaScene & s)
+{
+    if(vm_is_locked()) return;
+    uint16_t l, r, t, b;
+    int collide;
+    if(!hw_actor_abs_bounds(0, &l, &r, &t, &b, &collide)) return;
+
+    // trigger_at_intersection: the box's tile range (SUBPX_TO_TILE is `>> 8` to a byte)
+    // against each trigger's inclusive tile rect; the first hit wins.
+    const uint8_t tl = uint8_t(l >> 8), tr = uint8_t(r >> 8), tt = uint8_t(t >> 8), tb = uint8_t(b >> 8);
+    int hit_trigger = -1;
+    for(unsigned int i = 0; i < s.triggers_count; ++i)
+    {
+        const GbaTrigger & g = s.triggers[i];
+        if(tl <= g.x + g.w - 1 && tr >= g.x && tt <= g.y + g.h - 1 && tb >= g.y)
+        {
+            hit_trigger = (int)i;
+            break;
+        }
+    }
+
+    // actor_overlapping_player: the first collidable actor whose box overlaps the cursor's
+    // (gbvm compares the four edges in 16-bit unsigned arithmetic, as here).
+    const GbaActorInit * hit_actor = nullptr;
+    for(unsigned int i = 0; i < s.actors_init_count && !hit_actor; ++i)
+    {
+        const GbaActorInit & ai = s.actors_init[i];
+        if(ai.index == 0) continue;
+        uint16_t al, ar, at, ab;
+        int acoll;
+        if(!hw_actor_abs_bounds(ai.index, &al, &ar, &at, &ab, &acoll) || !acoll) continue;
+        if(al > r || ar < l || at > b || ab < t) continue;
+        hit_actor = &ai;
+    }
+
+    const bool hover_trigger = hit_trigger >= 0 && s.triggers[hit_trigger].script;
+    const bool hover_actor = hit_actor && hit_actor->interact;
+    hw_set_cursor_hover(hover_trigger || hover_actor);
+
+    if(hw_a_pressed())
+    {
+        if(hover_actor) script_execute(0, hit_actor->interact, nullptr, 1, 0);
+        else if(hover_trigger) script_execute(0, s.triggers[hit_trigger].script, nullptr, 1, 1);
+    }
+}
+
 extern "C" void gba_check_triggers(void)
 {
     const GbaScene & s = gba_scenes[current_scene];
+    if(s.scene_type == 4) { gba_pointnclick_update(s); return; }   // gbs2 G2 POINTNCLICK
     int in = -1;
     for(unsigned int i = 0; i < s.triggers_count; ++i)
     {
@@ -128,6 +183,8 @@ extern "C" void gba_check_triggers(void)
 // returns the runtime actor index; map it back to its GbaActorInit to find the script.
 extern "C" void gba_check_interact(void)
 {
+    // POINTNCLICK interacts through the cursor instead (gba_pointnclick_update).
+    if(gba_scenes[current_scene].scene_type == 4) return;
     const int actor = hw_interact_actor();
     if(actor < 0) return;
     const GbaScene & s = gba_scenes[current_scene];

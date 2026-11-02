@@ -51,6 +51,10 @@ typedef struct GbaActorInit {
     unsigned char * interact; // M6c: script run when the player faces this actor + presses A (0 if none)
     unsigned char move_speed; // M10a: authored speed in subpixels/frame (32 = 1px/frame); 0 = engine default
     unsigned char collision_group; // M10f: GB collision group bit (player 0x01, "1" 0x02, "2" 0x04, "3" 0x08)
+    // gbs2 G2: the actor's sprite bounding box, relative to its position, in subpixels -
+    // GB Studio's rect16_t { left, right, top, bottom } (right/bottom inclusive). All zero
+    // (rows from older editors) means GB Studio's default 16x16 box.
+    short bounds[4];
 } GbaActorInit;
 
 // One projectile definition (M10f) - GB Studio's projectile_def_t mapped to the GBA
