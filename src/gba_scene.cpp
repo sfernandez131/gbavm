@@ -159,6 +159,9 @@ static void gba_pointnclick_update(const GbaScene & s)
 
 extern "C" void gba_check_triggers(void)
 {
+    // gbs2 G3: BLANK tests no triggers, and leaves the debounce as it was (gbvm
+    // simply skips trigger_activate_at_intersection in that state).
+    if(hw_player_blank()) return;
     const GbaScene & s = gba_scenes[current_scene];
     if(s.scene_type == 4) { gba_pointnclick_update(s); return; }   // gbs2 G2 POINTNCLICK
     int in = -1;

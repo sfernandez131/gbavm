@@ -571,6 +571,7 @@ namespace
 extern int16_t gba_bg_angle; // defined below (M8d)
 extern int16_t gba_bg_spin;  // defined below (M8d): affine auto-spin, deg/frame x256
 extern int16_t gba_bg_scale; // defined below (M8d): affine scale, x256 (256 = 1.0)
+namespace { void plat_scene_reset(); } // defined with the platformer below (gbs2 G3)
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
 {
@@ -623,6 +624,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
         actors[i].hit_handle = SCRIPT_TERMINATED;
         actors[i].sprite_sheet = -1;    // back to the scene's sheet (M10h)
     }
+    plat_scene_reset();
 }
 
 // --- script camera control (matrix slice E) ------------------------------------
@@ -924,14 +926,25 @@ uint8_t plat_jump_buffer_frames = 2;  // jump pre-press window before landing
 uint8_t plat_extra_jumps = 1;         // air jumps (double jump)
 int16_t plat_jump_reduction = 0;      // per-air-jump height reduction
 uint8_t plat_air_control = 1;         // horizontal control while airborne
+// gbs2 G3 tunables (GB engine.json defaults): the knockback launch and its length,
+// and the BLANK state's gravity.
+int16_t plat_knockback_vel_x = 8192;  // horizontal push, away from the facing
+int16_t plat_knockback_vel_y = 16384; // upward launch
+uint8_t plat_knockback_frames = 30;   // frames before knockback can end
+int16_t plat_blank_grav = 0;          // gravity while BLANK (0 = held in place)
 // Player platform state, GB's enum order: 0 FALL, 1 GROUND, 2 JUMP, (3 DASH,)
-// 4 LADDER. Velocities + feel timers exported for GDB / runtime-test checks.
+// 4 LADDER, (5 WALL,) 6 KNOCKBACK, 7 BLANK. Velocities + feel timers exported for
+// GDB / runtime-test checks.
 uint8_t plat_state = 0;
+// gbs2 G3: GB's next-frame state. "Set Platformer State" writes it and the
+// platformer applies it at the top of its next update, as gbvm does.
+uint8_t plat_next_state = 0;
 int16_t plat_vel_x = 0;
 int16_t plat_vel_y = 0;
 uint8_t plat_coyote_timer = 0;        // frames of coyote jump left (M13d)
 uint8_t plat_jump_buffer_timer = 0;   // frames of buffered jump left (M13d)
 uint8_t plat_extra_jumps_counter = 0; // air jumps left (M13d)
+uint8_t plat_knockback_timer = 0;     // knockback frames left (gbs2 G3)
 // M13f SHMUP: auto-scroll speed (GB subpx/frame, 16/px - so 32 = 2px/frame) +
 // the exported scroll-camera centre in world px (readable for GDB / tests).
 uint8_t shooter_scroll_speed = 32;
@@ -959,6 +972,7 @@ namespace
     bool plat_ladder_block_v = false; // must release up/down after grabbing a ladder
     int16_t plat_jump_reduction_vel = 0; // accumulated reduction for stacked air jumps (M13d)
     int16_t plat_jump_vel_per_frame = 0; // hold + run boost applied per JUMP frame (M13d)
+    bool plat_anim_dirty = false;     // a state's animation override is showing (gbs2 G3)
     inline int plat_delta_subpx(int v) { return (v >> 8) << 2; }
     inline uint8_t coll_at_px(int px, int py)
     {
@@ -1153,17 +1167,186 @@ namespace
         shmup_cam_y = (int16_t)cam_y_px;
     }
 
+    // state_enter_jump parity: upward velocity, hold-boost setup (+ run boost
+    // from horizontal speed), and timers cleared. Also a scripted JUMP's entry.
+    void plat_begin_jump()
+    {
+        plat_state = 2;
+        plat_hold_timer = plat_jump_hold_frames;
+        if(-plat_jump_vel < plat_vel_y) plat_vel_y = (int16_t)-plat_jump_vel;
+        int jpf = plat_jump_hold_vel;
+        if(plat_run_boost != 0 && plat_run_vel != 0)
+        {
+            const int avx = plat_vel_x < 0 ? -plat_vel_x : plat_vel_x;
+            jpf += (avx / (plat_run_vel >> 7)) * (plat_run_boost >> 7);
+        }
+        plat_jump_vel_per_frame = (int16_t)jpf;
+        plat_coyote_timer = 0;
+        plat_jump_buffer_timer = 0;
+    }
+
+    // Integrate + collide. Horizontal: blocked by the facing edge bit (moving
+    // right hits the target tile's LEFT face 0x04; moving left its RIGHT face
+    // 0x08), sampled at body centre and near the feet. Returns PLAT_LANDED when a
+    // TOP face caught the falling feet and PLAT_BUMPED when a BOTTOM face stopped
+    // the head - the two outcomes gbvm's move_and_collide turns into GROUND/FALL.
+    constexpr uint8_t PLAT_LANDED = 0x01;
+    constexpr uint8_t PLAT_BUMPED = 0x02;
+    uint8_t plat_move_and_collide(Actor& p)
+    {
+        uint8_t hit = 0;
+        const int cx_px = p.x >> 5;
+        int nx = (int)p.x + plat_delta_subpx(plat_vel_x);
+        if(plat_vel_x != 0)
+        {
+            const int edge_px = (nx >> 5) + (plat_vel_x > 0 ? 8 : -8);
+            const uint8_t face = plat_vel_x > 0 ? 0x04 : 0x08;
+            const int body_py = (int)(p.y >> 5);
+            if((coll_at_px(edge_px, body_py) & face) ||
+               (coll_at_px(edge_px, body_py + 7) & face))
+            {
+                nx = (int)p.x;
+                plat_vel_x = 0;
+            }
+        }
+        if(nx < 0) nx = 0;
+        p.x = (uint16_t)nx;
+
+        int ny = (int)p.y + plat_delta_subpx(plat_vel_y);
+        if(plat_drop_timer != 0) plat_drop_timer--;
+        if(plat_vel_y > 0 && plat_drop_timer == 0) // falling: land on TOP faces
+        {
+            // Tunnel guard (M13c): terminal velocity moves ~10px/frame, more
+            // than a tile - sweep every row the feet cross, land on the first
+            // TOP face instead of only testing the destination row.
+            const int feet_from = ((int)(p.y >> 5) + 8) >> 3;
+            const int feet_to = ((ny >> 5) + 8) >> 3;
+            for(int ty = feet_from; ty <= feet_to; ++ty)
+            {
+                if(coll_at_px(cx_px, ty << 3) & 0x01)
+                {
+                    ny = ((ty << 3) - 8) << 5;    // snap feet to the tile top
+                    plat_vel_y = 0;
+                    hit |= PLAT_LANDED;
+                    break;
+                }
+            }
+        }
+        else if(plat_vel_y < 0)                   // rising: bump on BOTTOM faces
+        {
+            const int head_px = (ny >> 5) - 8;
+            if(coll_at_px(cx_px, head_px) & 0x02)
+            {
+                ny = (int)p.y;
+                plat_vel_y = 0;
+                hit |= PLAT_BUMPED;
+            }
+        }
+        if(ny < 0) { ny = 0; if(plat_vel_y < 0) plat_vel_y = 0; }
+        p.y = (uint16_t)ny;
+        return hit;
+    }
+
+    // gbs2 G3: gbvm's state_update_knockback. No input: air deceleration toward
+    // 0, gravity and the full collision pass. The state holds for
+    // plat_knockback_frames; after that it ends when gbvm's move_and_collide would
+    // move it on - landing (GROUND) or a head bump (FALL). Airborne, it carries on.
+    void knockback_update(Actor& p)
+    {
+        if(plat_vel_x < 0) { const int v = plat_vel_x + plat_air_dec; plat_vel_x = (int16_t)(v > 0 ? 0 : v); }
+        else               { const int v = plat_vel_x - plat_air_dec; plat_vel_x = (int16_t)(v < 0 ? 0 : v); }
+        int vy = plat_vel_y + plat_grav;
+        if(vy > plat_max_fall_vel) vy = plat_max_fall_vel;
+        plat_vel_y = (int16_t)vy;
+        const uint8_t hit = plat_move_and_collide(p);
+        if(plat_knockback_timer != 0) plat_knockback_timer--;
+        if(plat_knockback_timer != 0) return;
+        if(hit & PLAT_LANDED) plat_state = 1;
+        else if(hit & PLAT_BUMPED) plat_state = 0;
+    }
+
+    // gbs2 G3: gbvm's state_update_blank. Only plat_blank_grav moves the player,
+    // and its move_and_collide pass is Y-only with no wall check: nothing stops
+    // the fall, and no trigger is tested (hw_player_blank). GB clamps the step
+    // to MAX_DELTA (127 GB subpixels); the platformer's own steps are unclamped.
+    void blank_update(Actor& p)
+    {
+        int vy = plat_vel_y + plat_blank_grav;
+        if(vy > plat_max_fall_vel) vy = plat_max_fall_vel;
+        plat_vel_y = (int16_t)vy;
+        int d = plat_delta_subpx(plat_vel_y);
+        if(d > 254) d = 254;
+        int ny = (int)p.y + d;
+        if(ny > 0xFFFF) ny = 0xFFFF;
+        p.y = (uint16_t)ny;
+    }
+
+    // gbs2 G3: a platformer state's animation override - GB's PLATFORM_*_ANIM
+    // define fields, which the eject resolves to an animation-state row per state
+    // (GBA_PLAT_STATE_ANIM, -1 = none). gbvm's plat_set_player_anim_state, and
+    // plat_restore_default_anim_state for a state without one.
+    void plat_apply_state_anim(uint8_t state)
+    {
+        const int row = state < GBA_PLAT_STATES ? GBA_PLAT_STATE_ANIM[state] : -1;
+        if(row >= 0)
+        {
+            hw_actor_set_anim_state(0, (uint8_t)row);
+            plat_anim_dirty = true;
+        }
+        else if(plat_anim_dirty)
+        {
+            hw_actor_set_anim_state(0, 0);
+            plat_anim_dirty = false;
+        }
+    }
+
+    // GB's callback_e: states 0-7 own slots INIT 2s and END 2s + 1; RUN and FLOAT
+    // (8, 9) follow DASH_READY (16).
+    inline uint8_t plat_init_slot(uint8_t s) { return (uint8_t)(s < 8 ? 2 * s : 2 * s + 1); }
+
+    // gbs2 G3: gbvm's state change - the leaving state's exit, then the entering
+    // state's enter, each ending in its script slot. A scripted change (Set
+    // Platformer State) also needs the entering state's set-up, which gbavm's own
+    // transitions do inline; KNOCKBACK and BLANK are only ever entered by script.
+    void plat_change_state(uint8_t from, uint8_t to, bool scripted)
+    {
+        if(from == 6) plat_vel_x = 0;                          // state_exit_knockback
+        else if(from == 7) { plat_vel_x = 0; plat_vel_y = 0; } // state_exit_blank
+        plat_callback_execute((uint8_t)(plat_init_slot(from) + 1));
+        if(to == 6)                                            // state_enter_knockback
+        {
+            plat_vel_x = (int16_t)(actors[0].dir == 1 ? -plat_knockback_vel_x : plat_knockback_vel_x);
+            plat_vel_y = (int16_t)-plat_knockback_vel_y;
+            plat_knockback_timer = plat_knockback_frames;
+            plat_drop_timer = 0;
+        }
+        else if(to == 7) { plat_vel_x = 0; plat_vel_y = 0; }   // state_enter_blank
+        else if(to == 2 && scripted) plat_begin_jump();
+        plat_apply_state_anim(to);
+        plat_callback_execute(plat_init_slot(to));
+    }
+
+    // gbavm models neither DASH nor WALL (M13e), so a scripted request for one is
+    // ignored. gbvm's update runs RUN as GROUND and FLOAT as FALL, so those map.
+    uint8_t plat_scripted_state(uint8_t s)
+    {
+        if(s == 8) return 1;
+        if(s == 9) return 0;
+        if(s == 3 || s == 5 || s > 9) return 0xFF;
+        return s;
+    }
+
     // GB platform.c core loop, states only (M13b): GROUND/JUMP/FALL with
     // walk acc / turn friction / dec, jump + hold boost, gravity + hold
     // gravity, max fall; land on COLLISION_TOP under the feet, head-bump on
     // BOTTOM. Coyote/buffer/double-jump/run are M13d; one-ways from below and
     // ladders are M13c (a TOP-only tile already behaves one-way here: rising
-    // passes it, falling lands).
-    void platform_update()
+    // passes it, falling lands). KNOCKBACK and BLANK are gbs2 G3.
+    void platform_step(Actor& p)
     {
-        Actor& p = actors[0];
-        if(!p.active) return;
         if(plat_state == 4) { ladder_update(p); return; }  // LADDER (M13c)
+        if(plat_state == 6) { knockback_update(p); return; }
+        if(plat_state == 7) { blank_update(p); return; }
 
         // Horizontal input (handle_horizontal_input parity). B is the run
         // modifier (M13d): running raises the cap + accel. Airborne with air
@@ -1212,23 +1395,6 @@ namespace
         const bool jump_pressed = k_a_pressed();
         const uint8_t enter_state = plat_state;   // jumps decided on the entering state
 
-        // state_enter_jump parity: upward velocity, hold-boost setup (+ run
-        // boost from horizontal speed), and timers cleared.
-        auto begin_jump = [&]() {
-            plat_state = 2;
-            plat_hold_timer = plat_jump_hold_frames;
-            if(-plat_jump_vel < plat_vel_y) plat_vel_y = (int16_t)-plat_jump_vel;
-            int jpf = plat_jump_hold_vel;
-            if(plat_run_boost != 0 && plat_run_vel != 0)
-            {
-                const int avx = plat_vel_x < 0 ? -plat_vel_x : plat_vel_x;
-                jpf += (avx / (plat_run_vel >> 7)) * (plat_run_boost >> 7);
-            }
-            plat_jump_vel_per_frame = (int16_t)jpf;
-            plat_coyote_timer = 0;
-            plat_jump_buffer_timer = 0;
-        };
-
         if(enter_state == 1)                      // GROUND
         {
             // enter_ground parity: refresh jump grants every grounded frame.
@@ -1237,7 +1403,7 @@ namespace
             plat_jump_reduction_vel = 0;
             if((jump_pressed || plat_jump_buffer_timer != 0) && plat_drop_timer == 0)
             {
-                begin_jump();                     // standard / buffered jump
+                plat_begin_jump();                // standard / buffered jump
             }
             else
             {
@@ -1268,13 +1434,13 @@ namespace
             {
                 if(plat_coyote_timer != 0)
                 {
-                    begin_jump();                 // coyote-time ground jump
+                    plat_begin_jump();            // coyote-time ground jump
                 }
                 else if(plat_extra_jumps_counter != 0)
                 {
                     plat_extra_jumps_counter--;   // double / extra jump
                     plat_jump_reduction_vel += plat_jump_reduction;
-                    begin_jump();
+                    plat_begin_jump();
                 }
                 else
                 {
@@ -1305,57 +1471,54 @@ namespace
             plat_vel_y = (int16_t)vy;
         }
 
-        // Integrate + collide. Horizontal: blocked by the facing edge bit
-        // (moving right hits the target tile's LEFT face 0x04; moving left
-        // its RIGHT face 0x08), sampled at body centre and near the feet.
-        int nx = (int)p.x + plat_delta_subpx(plat_vel_x);
-        if(plat_vel_x != 0)
-        {
-            const int edge_px = (nx >> 5) + (plat_vel_x > 0 ? 8 : -8);
-            const uint8_t face = plat_vel_x > 0 ? 0x04 : 0x08;
-            const int body_py = (int)(p.y >> 5);
-            if((coll_at_px(edge_px, body_py) & face) ||
-               (coll_at_px(edge_px, body_py + 7) & face))
-            {
-                nx = (int)p.x;
-                plat_vel_x = 0;
-            }
-        }
-        if(nx < 0) nx = 0;
-        p.x = (uint16_t)nx;
-
-        int ny = (int)p.y + plat_delta_subpx(plat_vel_y);
-        if(plat_drop_timer != 0) plat_drop_timer--;
-        if(plat_vel_y > 0 && plat_drop_timer == 0) // falling: land on TOP faces
-        {
-            // Tunnel guard (M13c): terminal velocity moves ~10px/frame, more
-            // than a tile - sweep every row the feet cross, land on the first
-            // TOP face instead of only testing the destination row.
-            const int feet_from = ((int)(p.y >> 5) + 8) >> 3;
-            const int feet_to = ((ny >> 5) + 8) >> 3;
-            for(int ty = feet_from; ty <= feet_to; ++ty)
-            {
-                if(coll_at_px(cx_px, ty << 3) & 0x01)
-                {
-                    ny = ((ty << 3) - 8) << 5;    // snap feet to the tile top
-                    plat_vel_y = 0;
-                    plat_state = 1;               // land -> GROUND
-                    break;
-                }
-            }
-        }
-        else if(plat_vel_y < 0)                   // rising: bump on BOTTOM faces
-        {
-            const int head_px = (ny >> 5) - 8;
-            if(coll_at_px(cx_px, head_px) & 0x02)
-            {
-                ny = (int)p.y;
-                plat_vel_y = 0;
-            }
-        }
-        if(ny < 0) { ny = 0; if(plat_vel_y < 0) plat_vel_y = 0; }
-        p.y = (uint16_t)ny;
+        if(plat_move_and_collide(p) & PLAT_LANDED) plat_state = 1; // land -> GROUND
     }
+
+    void platform_update()
+    {
+        Actor& p = actors[0];
+        if(!p.active) return;
+        // gbs2 G3: a Set Platformer State request takes effect at the top of the
+        // next update, as in gbvm, which makes a scripted change frame-exact.
+        if(plat_next_state != plat_state)
+        {
+            const uint8_t to = plat_scripted_state(plat_next_state);
+            if(to != 0xFF && to != plat_state)
+            {
+                const uint8_t from = plat_state;
+                plat_state = to;
+                plat_change_state(from, to, true);
+            }
+        }
+        // gbavm's own transitions write plat_state mid-update, a frame before gbvm
+        // (which waits for the next update's top), so their hooks run here: once
+        // per frame like gbvm's, from the state the frame started in to the one it
+        // ended in.
+        const uint8_t start = plat_state;
+        platform_step(p);
+        if(plat_state != start) plat_change_state(start, plat_state, false);
+        plat_next_state = plat_state;
+    }
+
+    // gbs2 G3: gbvm's platform_init, for the state gbavm keeps. A scene starts on
+    // the ground, at rest, with no knockback running and the default animation.
+    // (Its state scripts are cleared with the other script tables, in
+    // script_runner_init.) gbvm also seeds plat_vel_y = 4000 against a GB load
+    // glitch; gbavm's tunnel-guarded landing does not need it.
+    void plat_scene_reset()
+    {
+        plat_state = plat_next_state = 1;
+        plat_vel_x = plat_vel_y = 0;
+        plat_knockback_timer = 0;
+        plat_anim_dirty = false;
+    }
+}
+
+// gbs2 G3: 1 while the platformer holds the player in BLANK, whose Y-only
+// collision pass tests no trigger in gbvm (so gba_check_triggers skips it too).
+int hw_player_blank(void)
+{
+    return (gba_current_scene_type == 1 && plat_state == 7) ? 1 : 0;
 }
 
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles)
