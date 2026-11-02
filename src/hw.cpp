@@ -1602,11 +1602,7 @@ void hw_player_update(void)
     // still use the top-down controller below.
     if(gba_current_scene_type == 1) { platform_update(); return; }
     if(gba_current_scene_type == 3) { shmup_update(); return; }   // M13f SHMUP
-    if(gba_current_scene_type == 4)                               // gbs2 G2 POINTNCLICK
-    {
-        if(!vm_is_locked()) pointnclick_update();                 // gbvm: no state update while locked
-        return;
-    }
+    if(gba_current_scene_type == 4) { pointnclick_update(); return; } // gbs2 G2 POINTNCLICK
     Actor& p = actors[0];
     if(!p.active) return;
     // Face + animate toward the held direction, but only advance into open tiles.

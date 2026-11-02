@@ -1016,8 +1016,11 @@ __attribute__((noinline)) void plat_callback_execute(UBYTE slot) {
 }
 
 // M6f: advance every armed timer one frame; when a slot's countdown elapses, run its
-// prepared script as a new thread and restart the countdown (timers repeat).
+// prepared script as a new thread and restart the countdown (timers repeat). Skipped
+// while the VM is locked, as gbvm skips its timer tick: a countdown pauses under the
+// lock and carries on from where it was once the lock is released.
 void timers_update(void) {
+    if (vm_lock_state) return;
     for (UBYTE c = 0; c < VM_MAX_TIMERS; c++) {
         VM_TIMER * t = &vm_timers[c];
         if (!t->active || t->interval == 0) continue;
