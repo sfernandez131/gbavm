@@ -185,6 +185,16 @@ void music_routine_raise(UBYTE param);
 void music_events_update(void);
 // gbs2 G2: 1 while a script holds the VM lock (gbvm VM_ISLOCKED).
 UBYTE vm_is_locked(void);
+// gbs2 G3: platformer state scripts - GB Studio's "Set/Remove Platformer Script"
+// events, ported from gbvm's platform.c. One slot per GB callback_e entry (FALL_INIT
+// 0 ... FLOAT_END 20); a state change runs the leaving state's END slot and the
+// entering state's INIT slot (plat_callback_execute), but only once the slot's previous
+// run has finished. Per-scene, like the other script tables. Exported for the headless
+// runtime test.
+#define VM_PLAT_EVENTS 21
+typedef struct { UBYTE bank; UBYTE * pc; UWORD handle; } VM_PLAT_EVENT;
+extern VM_PLAT_EVENT vm_plat_events[VM_PLAT_EVENTS];
+void plat_callback_execute(UBYTE slot);
 // Pending VM exception + its payload (read by the main loop after RUNNER_EXCEPTION).
 UBYTE vm_get_exception(void);
 UWORD vm_get_exception_param(void);

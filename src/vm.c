@@ -86,6 +86,10 @@ VM_MUSIC_EVENT vm_music_events[VM_MUSIC_EVENTS];
 static UBYTE music_routine_queue[MUSIC_ROUTINE_QUEUE_LEN];
 static UBYTE music_routine_head, music_routine_tail;
 
+// Platformer state scripts (gbs2 G3). See vm.h; the platformer in hw.cpp calls
+// plat_callback_execute on each state change.
+VM_PLAT_EVENT vm_plat_events[VM_PLAT_EVENTS];
+
 #define EXCEPTION_CODE_NONE 0
 
 // Resolve operand index to a typed pointer (negative = stack-relative, positive = global).
@@ -588,6 +592,9 @@ static const UBYTE vm_args_len[256] = {
     [0x6D]=0,
     // Replace Tile at XY: u8 x, u8 y, i16 tileset index, i16 tile index in it.
     [0x9C]=6,
+    // platformer state scripts (gbs2 G3): PLAT_CALLBACK_ATTACH slot, bank, addr(ptr);
+    // PLAT_CALLBACK_DETACH slot
+    [0x9D]=6, [0x9E]=1,
 };
 
 // little-endian fixed-argument readers
@@ -736,6 +743,19 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x6B: { VM_MUSIC_EVENT * ev = &vm_music_events[A_U8(0) & 0x03];
                      ev->bank = A_U8(1); ev->pc = A_PTR(2);
                      break; }
+        // PLAT_CALLBACK_ATTACH slot, bank, addr / DETACH slot (gbs2 G3): gbvm's
+        // plat_callback_attach/detach natives. GB passes the script as a bank + 16-bit
+        // pointer on the stack, which cannot hold a GBA address, so the editor rewrites
+        // the native call into these ops. Like gbvm, attach leaves the slot's handle.
+        case 0x9D: if (A_U8(0) < VM_PLAT_EVENTS) {
+                       VM_PLAT_EVENT * ev = &vm_plat_events[A_U8(0)];
+                       ev->bank = A_U8(1); ev->pc = A_PTR(2);
+                   }
+                   break;
+        case 0x9E: if (A_U8(0) < VM_PLAT_EVENTS) {
+                       vm_plat_events[A_U8(0)].bank = 0; vm_plat_events[A_U8(0)].pc = 0;
+                   }
+                   break;
         // CONTEXT_PREPARE slot, bank, addr: bind a 1-based slot to a script.
         case 0x55: { UBYTE slot = A_U8(0);
                      if (slot != 0 && slot <= VM_INPUT_BITS) {
@@ -859,6 +879,8 @@ void script_runner_init(UBYTE reset) {
         // M14e: music routine scripts too (GB music_init_events(FALSE) on scene change).
         memset(vm_music_events, 0, sizeof(vm_music_events));
         music_routine_head = music_routine_tail = 0;
+        // gbs2 G3: platformer state scripts (gbvm's plat_callback_reset in platform_init).
+        memset(vm_plat_events, 0, sizeof(vm_plat_events));
         hw_input_set_suppress(0);
     }
     UWORD * base_addr = &script_memory[VM_HEAP_SIZE];
@@ -980,6 +1002,17 @@ void music_events_update(void) {
         if (ev->handle == 0 || (ev->handle & SCRIPT_TERMINATED))
             script_execute(ev->bank, ev->pc, &ev->handle, 1, (int)(data >> 4));
     }
+}
+
+// gbs2 G3: gbvm's plat_callback_execute - run a state slot's script as a new thread,
+// unless its last run is still going. Kept out of line so the headless runtime test can
+// break on it and read the slot from r0.
+__attribute__((noinline)) void plat_callback_execute(UBYTE slot) {
+    if (slot >= VM_PLAT_EVENTS) return;
+    VM_PLAT_EVENT * ev = &vm_plat_events[slot];
+    if (!ev->pc) return;
+    if (ev->handle == 0 || (ev->handle & SCRIPT_TERMINATED))
+        script_execute(ev->bank, ev->pc, &ev->handle, 0);
 }
 
 // M6f: advance every armed timer one frame; when a slot's countdown elapses, run its

@@ -11,6 +11,10 @@
 #include "bn_regular_bg_items_scene1_bg.h"
 #include "bn_sprite_items_scene0_sprite_1.h"
 static const int GBA_ANIM_STATES = 1;
+// gbs2 G3: per platformer state (GB's state_e order), the animation-state row its
+// PLATFORM_*_ANIM override selects, or -1 for none.
+static const int GBA_PLAT_STATES = 10;
+static const signed char GBA_PLAT_STATE_ANIM[GBA_PLAT_STATES] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 struct GbaActorSprite {
     const bn::sprite_item* item;
     const unsigned char* anim_start; // [GBA_ANIM_STATES][8]

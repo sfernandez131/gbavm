@@ -45,6 +45,9 @@ void hw_replace_bg_tile_xy(int x, int y, int tilesetIdx, int startIdx);
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);
 // 1 if the player (actor 0) is within the given tile rect (M6b trigger zones).
 int hw_player_in_rect(int tx, int ty, int w, int h);
+// gbs2 G3: 1 while the platformer holds the player in its BLANK state, which tests
+// no triggers (gbvm's Y-only collision pass).
+int hw_player_blank(void);
 // M6c: if the player just pressed A while facing an adjacent placed actor (and no
 // dialogue is up), return that actor's runtime index so its interact script can run;
 // otherwise -1.
