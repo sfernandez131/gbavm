@@ -160,7 +160,8 @@ SCRIPT_CTX * script_execute(UBYTE bank, UBYTE * pc, UWORD * handle, UBYTE nargs,
 UBYTE script_terminate(UBYTE ID);
 // run one quant across all active contexts; returns a RUNNER_* code
 UBYTE script_runner_update(void);
-// M6f: advance armed timers one frame, firing any that elapse (called from the main loop).
+// M6f: advance armed timers one frame, firing any that elapse (called from the main loop;
+// skipped while the VM is locked, so a countdown pauses under the lock).
 void timers_update(void);
 // Slice C: fire any input-attached scripts whose button went down this frame, and
 // refresh the .OVERRIDE_DEFAULT suppression mask. Call once a frame, BEFORE the
@@ -183,7 +184,8 @@ typedef struct { UBYTE bank; UBYTE * pc; UWORD handle; } VM_MUSIC_EVENT;
 extern VM_MUSIC_EVENT vm_music_events[VM_MUSIC_EVENTS];
 void music_routine_raise(UBYTE param);
 void music_events_update(void);
-// gbs2 G2: 1 while a script holds the VM lock (gbvm VM_ISLOCKED).
+// gbs2 G2: 1 while a script holds the VM lock (gbvm VM_ISLOCKED). The main loop skips
+// the scene's state update (player control, triggers, A-to-interact) under it.
 UBYTE vm_is_locked(void);
 // gbs2 G3: platformer state scripts - GB Studio's "Set/Remove Platformer Script"
 // events, ported from gbvm's platform.c. One slot per GB callback_e entry (FALL_INIT

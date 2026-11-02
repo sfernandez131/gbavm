@@ -53,11 +53,20 @@ int main()
                 default: break;
             }
         }
+        // While a script holds the VM lock (a scene init, an actor's interact script, a
+        // trigger's script), gbvm skips input events, the scene type's state update,
+        // timers and music events, and keeps only the camera, actors, overlay and sound
+        // running. Its state update is the player's control and physics - a jump freezes
+        // mid-air - plus triggers and A-to-interact, so all three skip here. The event
+        // updates check the lock themselves.
         input_events_update();  // run scripts attached to a button (slice C); must be
                                 // before the default actions so .OVERRIDE_DEFAULT can hide keys
-        hw_player_update();     // d-pad -> player (actor 0) movement, when enabled
-        gba_check_triggers();   // fire a trigger zone's script when the player enters it (M6b)
-        if(!dialogue_was_open) gba_check_interact(); // A + facing a placed actor -> interact (M6c)
+        if(!vm_is_locked())
+        {
+            hw_player_update();     // d-pad -> player (actor 0) movement, when enabled
+            gba_check_triggers();   // fire a trigger zone's script when the player enters it (M6b)
+            if(!dialogue_was_open) gba_check_interact(); // A + facing a placed actor -> interact (M6c)
+        }
         timers_update();        // fire any timer scripts whose countdown elapsed (M6f)
         music_events_update();  // run scripts attached to music routines (M14e)
         hw_overlay_update();    // animate the dialogue overlay window box (slide in/out)

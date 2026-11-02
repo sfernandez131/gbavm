@@ -109,11 +109,10 @@ void gba_load_scene(unsigned int idx)
 // cursor's box picks out the first trigger its tiles overlap (trigger_at_intersection)
 // and the first collidable actor it overlaps (actor_overlapping_player), shows the hover
 // cursor over either one that has a script, and A runs it - the actor's with argument 0,
-// else the trigger's with argument 1 (trigger_interact). Skipped while the VM is locked,
-// where gbvm skips its whole state update.
+// else the trigger's with argument 1 (trigger_interact). Like the rest of the scene's
+// state update, the main loop skips it while the VM is locked.
 static void gba_pointnclick_update(const GbaScene & s)
 {
-    if(vm_is_locked()) return;
     uint16_t l, r, t, b;
     int collide;
     if(!hw_actor_abs_bounds(0, &l, &r, &t, &b, &collide)) return;
