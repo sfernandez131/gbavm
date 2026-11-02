@@ -941,11 +941,15 @@ uint8_t plat_state = 0;
 uint8_t plat_next_state = 0;
 int16_t plat_vel_x = 0;
 int16_t plat_vel_y = 0;
+// The step plat_move_and_collide last took, in subpixels (velocity converted and
+// clamped, before collision) - the runtime test's check on platformer speed.
+int16_t gba_plat_step_x = 0;
+int16_t gba_plat_step_y = 0;
 uint8_t plat_coyote_timer = 0;        // frames of coyote jump left (M13d)
 uint8_t plat_jump_buffer_timer = 0;   // frames of buffered jump left (M13d)
 uint8_t plat_extra_jumps_counter = 0; // air jumps left (M13d)
 uint8_t plat_knockback_timer = 0;     // knockback frames left (gbs2 G3)
-// M13f SHMUP: auto-scroll speed (GB subpx/frame, 16/px - so 32 = 2px/frame) +
+// M13f SHMUP: auto-scroll speed (subpx/frame, 32/px - so 32 = 1px/frame) +
 // the exported scroll-camera centre in world px (readable for GDB / tests).
 uint8_t shooter_scroll_speed = 32;
 int16_t shmup_cam_x = 0;
@@ -964,16 +968,25 @@ void hw_set_player_move(uint8_t enabled)
 
 namespace
 {
-    // M13b runtime state (velocities in GB Q8.8 units; positions in GBA 32/px
-    // subpixels). GB integrates VEL_TO_SUBPX(v) = (v>>8)<<1 GB-subpixels
-    // (16/px); GBA subpixels are 32/px, so the delta doubles: (v>>8)<<2.
+    // M13b runtime state (velocities in GB Q8.8 units; positions in 32/px
+    // subpixels, the same unit as GB Studio 4's). A velocity moves the player
+    // gbvm's VEL_TO_SUBPX(v) = (v>>8)<<1 subpixels a frame - the shift is
+    // arithmetic, so a negative velocity keeps its sign - and move_and_collide
+    // clamps each axis's step to MAX_DELTA.
     uint8_t plat_hold_timer = 0;
-    uint8_t plat_drop_timer = 0;      // frames of suppressed TOP landings (drop-through)
+    uint8_t plat_drop_timer = 0;      // frames left passing one-way tiles (drop-through)
     bool plat_ladder_block_v = false; // must release up/down after grabbing a ladder
     int16_t plat_jump_reduction_vel = 0; // accumulated reduction for stacked air jumps (M13d)
     int16_t plat_jump_vel_per_frame = 0; // hold + run boost applied per JUMP frame (M13d)
     bool plat_anim_dirty = false;     // a state's animation override is showing (gbs2 G3)
-    inline int plat_delta_subpx(int v) { return (v >> 8) << 2; }
+    inline int plat_delta_subpx(int v) { return (v >> 8) << 1; }
+    // gbvm's MAX_DELTA: 127 subpixels, just under 4px - it caps the fall at
+    // terminal velocity and the first frame of a jump.
+    constexpr int PLAT_MAX_DELTA = 127;
+    inline int plat_clamp_delta(int d)
+    {
+        return d > PLAT_MAX_DELTA ? PLAT_MAX_DELTA : (d < -PLAT_MAX_DELTA ? -PLAT_MAX_DELTA : d);
+    }
     inline uint8_t coll_at_px(int px, int py)
     {
         if(!collisions) return 0;
@@ -1129,8 +1142,8 @@ namespace
         // the camera -> no change -> reached the end).
         if(!shmup_end)
         {
-            const bn::fixed step = bn::fixed(shooter_scroll_speed) / 16; // px/frame
-            const int drag = shooter_scroll_speed * 2;                  // GBA subpx (32/px vs GB 16/px)
+            const bn::fixed step = bn::fixed(shooter_scroll_speed) / SUBPX; // px/frame
+            const int drag = shooter_scroll_speed;                          // subpx, as gbvm's shmup.c
             bn::fixed tx = shmup_cx, ty = shmup_cy;
             if(shmup_dir == 3)      tx = shmup_cx - step;               // left
             else if(shmup_dir == 1) tx = shmup_cx + step;               // right
@@ -1196,7 +1209,11 @@ namespace
     {
         uint8_t hit = 0;
         const int cx_px = p.x >> 5;
-        int nx = (int)p.x + plat_delta_subpx(plat_vel_x);
+        const int dx = plat_clamp_delta(plat_delta_subpx(plat_vel_x));
+        const int dy = plat_clamp_delta(plat_delta_subpx(plat_vel_y));
+        gba_plat_step_x = (int16_t)dx;
+        gba_plat_step_y = (int16_t)dy;
+        int nx = (int)p.x + dx;
         if(plat_vel_x != 0)
         {
             const int edge_px = (nx >> 5) + (plat_vel_x > 0 ? 8 : -8);
@@ -1212,21 +1229,25 @@ namespace
         if(nx < 0) nx = 0;
         p.x = (uint16_t)nx;
 
-        int ny = (int)p.y + plat_delta_subpx(plat_vel_y);
+        int ny = (int)p.y + dy;
         if(plat_drop_timer != 0) plat_drop_timer--;
-        if(plat_vel_y > 0 && plat_drop_timer == 0) // falling: land on TOP faces
+        if(plat_vel_y > 0)                        // falling: land on TOP faces
         {
-            // Tunnel guard (M13c): terminal velocity moves ~10px/frame, more
-            // than a tile - sweep every row the feet cross, land on the first
-            // TOP face instead of only testing the destination row.
+            // Tunnel guard (M13c): sweep every row the feet cross and land on
+            // the first TOP face, not only the destination row's. A clamped
+            // step is under 4px, so it crosses one tile top at most. While a
+            // drop-through runs, a one-way tile (TOP with no BOTTOM face) is
+            // passed and a solid one still lands, as in gbvm.
             const int feet_from = ((int)(p.y >> 5) + 8) >> 3;
             const int feet_to = ((ny >> 5) + 8) >> 3;
             for(int ty = feet_from; ty <= feet_to; ++ty)
             {
-                if(coll_at_px(cx_px, ty << 3) & 0x01)
+                const uint8_t t = coll_at_px(cx_px, ty << 3);
+                if((t & 0x01) && !(plat_drop_timer != 0 && !(t & 0x02)))
                 {
                     ny = ((ty << 3) - 8) << 5;    // snap feet to the tile top
                     plat_vel_y = 0;
+                    plat_drop_timer = 0;
                     hit |= PLAT_LANDED;
                     break;
                 }
@@ -1267,16 +1288,14 @@ namespace
 
     // gbs2 G3: gbvm's state_update_blank. Only plat_blank_grav moves the player,
     // and its move_and_collide pass is Y-only with no wall check: nothing stops
-    // the fall, and no trigger is tested (hw_player_blank). GB clamps the step
-    // to MAX_DELTA (127 GB subpixels); the platformer's own steps are unclamped.
+    // the fall, and no trigger is tested (hw_player_blank). The step is clamped
+    // to MAX_DELTA, as every move_and_collide pass is.
     void blank_update(Actor& p)
     {
         int vy = plat_vel_y + plat_blank_grav;
         if(vy > plat_max_fall_vel) vy = plat_max_fall_vel;
         plat_vel_y = (int16_t)vy;
-        int d = plat_delta_subpx(plat_vel_y);
-        if(d > 254) d = 254;
-        int ny = (int)p.y + d;
+        int ny = (int)p.y + plat_clamp_delta(plat_delta_subpx(plat_vel_y));
         if(ny > 0xFFFF) ny = 0xFFFF;
         p.y = (uint16_t)ny;
     }
@@ -1420,7 +1439,7 @@ namespace
                     if((footing & 0x0f) == 0x01)
                     {
                         plat_state = 0;
-                        plat_drop_timer = 6;      // suppress TOP landings briefly
+                        plat_drop_timer = 15;     // gbvm's DROP_FRAMES_MAX
                     }
                 }
             }
