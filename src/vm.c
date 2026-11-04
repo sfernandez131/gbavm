@@ -11,7 +11,8 @@
 //   * SDCC qualifiers (OLDCALL/BANKED/NONBANKED/NAKED) removed; handlers are static.
 //   * ROM bank-switching removed - the GBA has a flat address space.
 //   * Code targets are native 32-bit pointers; return addresses use a separate
-//     per-thread return stack (SCRIPT_CTX.ret_sp) instead of the 16-bit data stack.
+//     per-thread return stack (SCRIPT_CTX.ret_sp). Calls still take gbvm's 1 (near)
+//     or 2 (far) words on the 16-bit data stack, which argument offsets count on.
 //   * VM_STEP (hand-written Z80 asm in the original) is a portable C dispatch loop.
 //   * Helper math (isqrt / rng) is local; atan2 is a TODO stub.
 //
@@ -186,21 +187,32 @@ static inline uint32_t rd_u32(const UBYTE * p) {
 
 static void vm_jump(SCRIPT_CTX * THIS, UBYTE * pc) { THIS->PC = pc; }
 
+// A call takes as many data-stack words as on gbvm: one for a near call (gbvm's PC) and
+// two for a far call (PC + bank). Compiled scripts address their arguments past that
+// frame - GB Studio places a custom event's arguments at .SCRIPT_ARG_n = -(3 + locals + n)
+// - so a smaller frame reads the caller's words instead (every actor argument read 0, the
+// player). A 32-bit return address does not fit a word, so the real one goes on the return
+// stack, and the frame words keep gbvm's contents: the PC's low half, then the bank.
 static void vm_call(SCRIPT_CTX * THIS, UBYTE * pc) {
+    *(THIS->stack_ptr++) = (UWORD)(uintptr_t)THIS->PC;
     *(THIS->ret_sp++) = THIS->PC;   // push return address onto the return stack
     THIS->PC = pc;
 }
 static void vm_ret(SCRIPT_CTX * THIS, UBYTE n) {
+    THIS->stack_ptr--;              // drop the call's frame word
     THIS->PC = *(--THIS->ret_sp);   // pop return address
     if (n) THIS->stack_ptr -= n;    // clean up n data words
 }
-// "far" calls are identical to near calls on the GBA (no banks); bank is ignored.
+// "far" calls jump like near calls on the GBA (no banks); bank is ignored.
 static void vm_call_far(SCRIPT_CTX * THIS, UBYTE bank, UBYTE * pc) {
     (void)bank;
+    *(THIS->stack_ptr++) = (UWORD)(uintptr_t)THIS->PC;
+    *(THIS->stack_ptr++) = THIS->bank;
     *(THIS->ret_sp++) = THIS->PC;
     THIS->PC = pc;
 }
 static void vm_ret_far(SCRIPT_CTX * THIS, UBYTE n) {
+    THIS->stack_ptr -= 2;           // drop the call's frame words
     THIS->PC = *(--THIS->ret_sp);
     if (n) THIS->stack_ptr -= n;
 }

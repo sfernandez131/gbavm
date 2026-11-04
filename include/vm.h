@@ -17,8 +17,9 @@
 //     pointers, not 16-bit addresses. When the compiler is ported it will emit
 //     these as linker-resolved &label values.
 //   * Return addresses live on a separate per-thread 32-bit return stack
-//     (SCRIPT_CTX.ret_sp), so the 16-bit data stack stays identical to GB Studio's
-//     and the compiler's stack-index math is unchanged.
+//     (SCRIPT_CTX.ret_sp). A call still takes gbvm's words on the 16-bit data stack
+//     (1 near, 2 far), so the data stack stays identical to GB Studio's and the
+//     compiler's stack-index math (custom-event arguments) is unchanged.
 //   * ROM bank-switching is gone (flat address space); bank operands are ignored.
 
 #include <stdint.h>
