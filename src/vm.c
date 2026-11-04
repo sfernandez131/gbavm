@@ -663,7 +663,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         case 0x3A: hw_actor_get_pos((uint16_t *)vm_resolve_ref(THIS, A_I16(0))); break;
         // actor movement (M3b). The i16 operand resolves to an {index, x, y} block;
         // MOVE_TO_X/Y/XY block (rewind past opcode + its 3 operand bytes) until arrival.
-        case 0x32: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_init((INT16)r[0], r[1], r[2]); break; }
+        case 0x32: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_init((INT16)r[0], &r[1], A_U8(2)); break; }
         case 0x34: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_dir((INT16)r[0], A_U8(2)); break; }
         case 0x36: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 0)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
         case 0x37: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 1)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
@@ -711,9 +711,12 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
             break; }
         // M10e: single-op Move To - the ref block is {ID, X, Y, ATTR}; face the
         // dominant remaining axis, step both, rewind until arrival (like 0x38).
+        // The destination is resolved on the first run only (THIS->flags, as gbvm's
+        // vm_actor_move_to), so a relative move doesn't re-add its offset every frame.
         case 0x46: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));
-                     hw_actor_move_init((INT16)r[0], r[1], r[2]);
+                     if (!THIS->flags) { hw_actor_move_init((INT16)r[0], &r[1], (UBYTE)r[3]); THIS->flags = 1; }
                      if (!hw_actor_move_step((INT16)r[0], 2)) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; }
+                     else THIS->flags = 0;
                      break; }
         // Camera control (slice E). MOVE_TO blocks the thread until both axes arrive,
         // the same PC-rewind pattern the actor moves and fades use.
