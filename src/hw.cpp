@@ -60,6 +60,10 @@ int32_t gba_camera_sub_x = 0;
 int32_t gba_camera_sub_y = 0;
 uint8_t gba_camera_lock_x = 1;   // 1 = that axis follows the lowest active actor
 uint8_t gba_camera_lock_y = 1;
+// The camera centre hw_render last set, in pixels from the scene's top-left (shake
+// included). Lets the runtime test check the view on a scene wider than 512 px.
+int16_t gba_camera_px_x = 0;
+int16_t gba_camera_px_y = 0;
 }
 
 namespace
@@ -472,8 +476,9 @@ namespace
     int shake_total = 0;                         // total shake length, for amplitude decay
 
     // GBVM actor subpixels -> Butano world pixels. The scene is centred on the world
-    // origin (the bg content is centred on its padded map, which create_bg(0,0) puts
-    // at the origin), so screen placement is left to the camera.
+    // origin (the bg content is centred on its padded map, on the tile grid, and the
+    // generated gba_create_scene_bg shifts the bg by the 0 or 4 px that rounding cost),
+    // so screen placement is left to the camera.
     bn::fixed to_world_x(uint16_t sx) { return bn::fixed(int(sx) / SUBPX - scene_w_px / 2); }
     bn::fixed to_world_y(uint16_t sy) { return bn::fixed(int(sy) / SUBPX - scene_h_px / 2); }
 
@@ -725,6 +730,8 @@ void hw_render(void)
             --shake_frames;
         }
         camera->set_position(cx, cy);
+        gba_camera_px_x = int16_t(cx.right_shift_integer() + scene_w_px / 2);
+        gba_camera_px_y = int16_t(cy.right_shift_integer() + scene_h_px / 2);
     }
 
     // M8d: auto-spin the affine (Mode-7) scene bg by gba_bg_spin (deg/frame,
@@ -2524,9 +2531,11 @@ void hw_actor_set_pos(uint16_t* pos)
     if(id < 0 || id >= MAX_ACTORS) return;
     Actor& a = actors[id];
     // Infer facing from the movement delta so the actor turns as it walks
-    // (until VM_ACTOR_SET_DIR lands in a later gameplay phase).
-    const int dx = int(int16_t(pos[1])) - int(int16_t(a.x));
-    const int dy = int(int16_t(pos[2])) - int(int16_t(a.y));
+    // (until VM_ACTOR_SET_DIR lands in a later gameplay phase). Positions are
+    // unsigned, as in move_axis: read as int16_t, a scene wider than 1024 px
+    // (32768 subpixels) wraps, and a step across that line faces backwards.
+    const int dx = int(pos[1]) - int(a.x);
+    const int dy = int(pos[2]) - int(a.y);
     if(dx != 0 || dy != 0)
     {
         a.moving = true;
