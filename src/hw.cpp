@@ -86,6 +86,7 @@ namespace
     inline bool k_a_held()      { return bn::keypad::a_held()      && !(input_suppress & 0x10); }
     inline bool k_b_held()      { return bn::keypad::b_held()      && !(input_suppress & 0x20); }
     inline bool k_a_pressed()   { return bn::keypad::a_pressed()   && !(input_suppress & 0x10); }
+    inline bool k_up_pressed()  { return bn::keypad::up_pressed()  && !(input_suppress & 0x04); }
 
     // M8b: raise GB's tight actor cap. 12 active actors runs at a full 60fps
     // alongside the fixture's dialogue text + projectile sprites; 14+ trips
@@ -1658,16 +1659,6 @@ void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_ti
     coll_h = height_tiles;
 }
 
-// M6b: 1 if the player (actor 0) currently stands within the given tile rect (used to
-// fire trigger zones). The player's centre tile = position subpixels / SUBPX / 8.
-int hw_player_in_rect(int tx, int ty, int w, int h)
-{
-    const Actor& p = actors[0];
-    if(!p.active) return 0;
-    const int px = (int)p.x / SUBPX / 8, py = (int)p.y / SUBPX / 8;
-    return (px >= tx && px < tx + w && py >= ty && py < ty + h) ? 1 : 0;
-}
-
 // M6c: when the player presses A and faces an adjacent placed actor (no dialogue up),
 // return that actor's runtime index so its interact script can run; else -1. The "front"
 // tile is the player's tile stepped one unit in their facing direction. text_showing
@@ -1717,6 +1708,8 @@ int hw_actor_abs_bounds(int16_t id, uint16_t* left, uint16_t* right, uint16_t* t
 void hw_set_cursor_hover(int hover) { actors[0].dir = hover ? 1 : 0; }
 
 int hw_a_pressed(void) { return (!text_showing && k_a_pressed()) ? 1 : 0; }
+
+int hw_up_pressed(void) { return k_up_pressed() ? 1 : 0; }
 
 // M6c: 1 while a dialogue box is on screen. The main loop samples this at the start of a
 // frame so the A press that dismisses a dialogue isn't also read as a fresh interaction

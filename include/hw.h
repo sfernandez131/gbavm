@@ -44,8 +44,6 @@ void hw_replace_bg_tile_xy(int x, int y, int tilesetIdx, int startIdx);
 // Set the loaded scene's collision grid (one byte/tile, row-major). Movement is
 // blocked into any tile whose low nibble is non-zero, and outside the grid bounds.
 void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_tiles);
-// 1 if the player (actor 0) is within the given tile rect (M6b trigger zones).
-int hw_player_in_rect(int tx, int ty, int w, int h);
 // gbs2 G3: 1 while the platformer holds the player in its BLANK state, which tests
 // no triggers (gbvm's Y-only collision pass).
 int hw_player_blank(void);
@@ -88,6 +86,8 @@ int hw_actor_abs_bounds(int16_t id, uint16_t* left, uint16_t* right, uint16_t* t
 void hw_set_cursor_hover(int hover);
 // gbs2 G2: 1 when the A button went down this frame and no dialogue is open.
 int hw_a_pressed(void);
+// gbs2 G5: 1 when Up went down this frame (a platformer re-fires its trigger on it).
+int hw_up_pressed(void);
 
 // --- actor movement (VM_ACTOR_MOVE_TO_* / SET_DIR) ---
 // GB Studio's "Move To" compiles to MOVE_TO_INIT (set destination) then per-axis
