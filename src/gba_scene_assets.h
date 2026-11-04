@@ -61,4 +61,12 @@ inline bn::optional<bn::affine_bg_ptr> gba_create_scene_affine_bg(int sceneIdx) 
     (void)sceneIdx;
     return bn::optional<bn::affine_bg_ptr>();
 }
+// gbs2 G4: a scene's parallax bands, top first - each a regular bg holding only
+// that band's rows, with gbvm's shift in *shift. Baseline has none -> nullopt.
+inline bn::optional<bn::regular_bg_ptr> gba_create_scene_parallax_bg(int sceneIdx, int band, int* shift) {
+    (void)sceneIdx;
+    (void)band;
+    *shift = 0;
+    return bn::optional<bn::regular_bg_ptr>();
+}
 #endif

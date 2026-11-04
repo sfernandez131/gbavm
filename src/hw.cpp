@@ -64,6 +64,9 @@ uint8_t gba_camera_lock_y = 1;
 // included). Lets the runtime test check the view on a scene wider than 512 px.
 int16_t gba_camera_px_x = 0;
 int16_t gba_camera_px_y = 0;
+// gbs2 G4: each parallax band's left edge, in pixels from the scene's left (its
+// scroll), as hw_render last set it. 0 past the scene's band count.
+int16_t gba_parallax_px[2] = {};
 }
 
 namespace
@@ -411,6 +414,17 @@ namespace
     bn::fixed bg_scale = 1;                       // current uniform scale
     bn::optional<bn::camera_ptr> camera;         // bg + sprites scroll with this
 
+    // gbs2 G4: parallax. gbvm splits the screen into up to three bands with an LCD
+    // interrupt; each band above the last scrolls at camera x >> shift and stays put
+    // vertically (SCY 0), and the last band is the normal view. Here each upper band is
+    // its own regular bg holding only that band's rows, drawn over the scene bg at the
+    // same priority (the eject makes every scene pixel opaque, so the bands cover it).
+    constexpr int MAX_PARALLAX_BANDS = 2;
+    bn::optional<bn::regular_bg_ptr> parallax_bgs[MAX_PARALLAX_BANDS];
+    int parallax_shifts[MAX_PARALLAX_BANDS] = {};
+    bn::fixed_point parallax_origins[MAX_PARALLAX_BANDS]; // where the band bg was created
+    int parallax_count = 0;
+
     // Choice / menu cursor state (M11a, VM_CHOICE). The menu text is a normal
     // dialogue (already displayed + revealed by the time VM_CHOICE runs); this
     // adds the cursor glyph and the item-graph navigation.
@@ -598,6 +612,14 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     // regular bg; the transform op then rotates/scales it. Non-affine scenes
     // are unchanged (gba_create_scene_affine_bg returns nullopt in that case).
     bg_rot = 0; bg_scale = 1; gba_bg_angle = 0; gba_bg_spin = 0; gba_bg_scale = 256;
+    // G4: free the old scene's bands first. Butano has four bg slots, and the new scene
+    // bg is created while the old one still holds its slot.
+    for(int b = 0; b < MAX_PARALLAX_BANDS; ++b)
+    {
+        parallax_bgs[b].reset();
+        gba_parallax_px[b] = 0;
+    }
+    parallax_count = 0;
     scene_affine_bg = gba_create_scene_affine_bg(scene_idx);
     if(scene_affine_bg)
     {
@@ -608,6 +630,19 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     {
         scene_bg = gba_create_scene_bg(scene_idx);
         scene_bg->set_camera(*camera);
+        // G4: the bands go over the scene bg (a lower z order draws later). They take no
+        // camera: hw_render places them from it each frame.
+        for(int b = 0; b < MAX_PARALLAX_BANDS; ++b)
+        {
+            int shift = 0;
+            bn::optional<bn::regular_bg_ptr> band = gba_create_scene_parallax_bg(scene_idx, b, &shift);
+            if(!band) break;
+            band->set_z_order(-1);
+            parallax_origins[b] = band->position();
+            parallax_shifts[b] = shift;
+            parallax_bgs[b] = band;
+            parallax_count = b + 1;
+        }
     }
     hw_overlay_hide(); // clear any dialogue box carried from the previous scene
     for(int i = 0; i < 8; ++i) sprite_pal_set[i] = false; // palettes reload per scene (M12d)
@@ -732,6 +767,33 @@ void hw_render(void)
         camera->set_position(cx, cy);
         gba_camera_px_x = int16_t(cx.right_shift_integer() + scene_w_px / 2);
         gba_camera_px_y = int16_t(cy.right_shift_integer() + scene_h_px / 2);
+
+        // G4: place the parallax bands. gbvm scrolls an upper band to draw_scroll_x >>
+        // shift (<< -shift when negative; 127, and the -128 of "fixed position", leave
+        // it at 0), where draw_scroll_x is the view's left edge in scene pixels, and
+        // pins it vertically with the camera at the scene's top. A scene too narrow to
+        // scroll on the GBA has its view centred, so the scroll counts from that view.
+        if(parallax_count > 0)
+        {
+            const int min_left = scene_w_px >= 2 * HALF_W ? 0 : scene_w_px / 2 - HALF_W;
+            const int scrolled = gba_camera_px_x - HALF_W - min_left;
+            const int limit_y = scene_h_px / 2 - HALF_H;
+            const int band_cam_y = limit_y > 0 ? -limit_y : 0;
+            for(int b = 0; b < parallax_count; ++b)
+            {
+                const int shift = parallax_shifts[b];
+                int band_scrolled = 0;
+                if(shift >= 0 && shift < 16)      band_scrolled = scrolled >> shift;
+                else if(shift < 0 && shift > -16) band_scrolled = scrolled << -shift;
+                const int left = min_left + band_scrolled;
+                gba_parallax_px[b] = int16_t(left);
+                // The band's own camera centre in world pixels; a bg with no camera
+                // draws at its position minus that.
+                const int band_cam_x = left + HALF_W - scene_w_px / 2;
+                parallax_bgs[b]->set_position(parallax_origins[b].x() - band_cam_x,
+                                              parallax_origins[b].y() - band_cam_y);
+            }
+        }
     }
 
     // M8d: auto-spin the affine (Mode-7) scene bg by gba_bg_spin (deg/frame,
