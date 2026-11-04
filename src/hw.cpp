@@ -592,6 +592,7 @@ extern int16_t gba_bg_angle; // defined below (M8d)
 extern int16_t gba_bg_spin;  // defined below (M8d): affine auto-spin, deg/frame x256
 extern int16_t gba_bg_scale; // defined below (M8d): affine scale, x256 (256 = 1.0)
 namespace { void plat_scene_reset(); } // defined with the platformer below (gbs2 G3)
+namespace { void topdown_scene_reset(); } // defined with the top-down grid below (gbs2 G5)
 namespace { void player_collision_reset(); } // defined with the player collision below (gbs2 G3b)
 
 void hw_load_scene(int scene_idx, int width_px, int height_px)
@@ -671,6 +672,7 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
         actors[i].sprite_sheet = -1;    // back to the scene's sheet (M10h)
     }
     plat_scene_reset();
+    topdown_scene_reset();
     player_collision_reset();
 }
 
@@ -1716,27 +1718,173 @@ int hw_up_pressed(void) { return k_up_pressed() ? 1 : 0; }
 // (script_runner_update clears text_showing mid-frame, before gba_check_interact runs).
 int hw_dialogue_active(void) { return text_showing ? 1 : 0; }
 
+// --- top-down grid movement (gbs2 G5) ---------------------------------------------------
+//
+// gbvm's topdown_update. The player steps a whole grid square (topdown_grid, 8 or 16 px)
+// at a time: input, walls and the actor in front are read only while it stands on the
+// grid, and it then walks to the next square at its move speed and stops there. Triggers
+// and A-to-interact run on the grid only too (hw_player_on_grid). gbavm used to move the
+// player freely and test triggers every frame, so a trigger could fire mid-step: gbs2's
+// paired triggers at Sample Town's entrance, which each walk the player 3 tiles past the
+// other, then handed it back and forth for good.
+extern "C" { uint8_t topdown_grid = 8; } // engine field (GB's default)
+
+namespace
+{
+    bool td_moving = false;     // gbvm's player_moving
+    uint16_t td_max = 0;        // where the current step ends (gbvm's max_pos)
+    uint8_t td_last_dpad = 0;   // last frame's d-pad, for td_recent
+    uint8_t td_recent = 0;      // gbvm's recent_joy: the d-pad keys pressed most recently
+
+    void topdown_scene_reset() { td_moving = false; td_max = 0; td_last_dpad = 0; td_recent = 0; }
+
+    bool on_grid(const Actor& p)
+    {
+        if(topdown_grid == 16) return ((p.x >> 5) & 15) == 0 && ((p.y >> 5) & 15) == 8;
+        return ((p.x | p.y) & 0xFF) == 0;
+    }
+
+    // A tile's collision byte; outside the scene counts as every edge solid.
+    uint8_t tile_bits(int tx, int ty)
+    {
+        if(tx < 0 || ty < 0 || tx >= coll_w || ty >= coll_h) return 0x0F;
+        return collisions ? collisions[ty * coll_w + tx] : 0;
+    }
+
+    // gbvm's tile_col_test_range_y / _x: does any tile of the column (row) range have a
+    // bit of `mask` set?
+    bool col_range_y(uint8_t mask, int tx, int ty0, int ty1)
+    {
+        for(int ty = ty0; ; ty += ty0 < ty1 ? 1 : -1)
+        {
+            if(tile_bits(tx, ty) & mask) return true;
+            if(ty == ty1) return false;
+        }
+    }
+    bool col_range_x(uint8_t mask, int ty, int tx0, int tx1)
+    {
+        for(int tx = tx0; ; tx += tx0 < tx1 ? 1 : -1)
+        {
+            if(tile_bits(tx, ty) & mask) return true;
+            if(tx == tx1) return false;
+        }
+    }
+
+    // gbvm's actor_in_front_of_player: the first collidable actor the player's box would
+    // overlap one grid square ahead in its facing direction, or -1.
+    int actor_in_front(const Actor& p)
+    {
+        const int d = topdown_grid * SUBPX;
+        int ox = 0, oy = 0;
+        switch(p.dir) { case 0: oy = d; break; case 1: ox = d; break; case 2: oy = -d; break; default: ox = -d; break; }
+        const uint16_t l = uint16_t(p.x + ox + p.b_left), r = uint16_t(p.x + ox + p.b_right);
+        const uint16_t t = uint16_t(p.y + oy + p.b_top), b = uint16_t(p.y + oy + p.b_bottom);
+        for(int i = 1; i < MAX_ACTORS; ++i)
+        {
+            const Actor& a = actors[i];
+            if(!a.active || !a.coll_enabled) continue;
+            if(uint16_t(a.x + a.b_left) > r || uint16_t(a.x + a.b_right) < l ||
+               uint16_t(a.y + a.b_top) > b || uint16_t(a.y + a.b_bottom) < t) continue;
+            return i;
+        }
+        return -1;
+    }
+
+    void topdown_update(Actor& p)
+    {
+        // recent_joy (gbvm's input_update): when the d-pad changes, the keys just pressed.
+        // A direction counts if it is the recent one, or if nothing is recent and it is held.
+        const uint8_t dpad = uint8_t((k_left_held() ? 1 : 0) | (k_right_held() ? 2 : 0) |
+                                     (k_up_held() ? 4 : 0) | (k_down_held() ? 8 : 0));
+        if(dpad != td_last_dpad) td_recent = uint8_t(dpad & ~td_last_dpad);
+        td_last_dpad = dpad;
+        const auto recent = [dpad](uint8_t bit) { return (td_recent & bit) || (!td_recent && (dpad & bit)); };
+
+        if(on_grid(p))
+        {
+            td_moving = false;
+            const int left = uint16_t(p.x + p.b_left) >> 8, right = uint16_t(p.x + p.b_right) >> 8;
+            const int top = uint16_t(p.y + p.b_top) >> 8, bottom = uint16_t(p.y + p.b_bottom) >> 8;
+            // The wall test is the edge of the next tile that faces the player
+            // (COLLISION_TOP 0x1, BOTTOM 0x2, LEFT 0x4, RIGHT 0x8).
+            if(recent(1))      { p.dir = 3; td_moving = !col_range_y(0x08, left - 1, top, bottom); }
+            else if(recent(2)) { p.dir = 1; td_moving = !col_range_y(0x04, right + 1, top, bottom); }
+            else if(recent(4)) { p.dir = 2; td_moving = !col_range_x(0x02, top - 1, left, right); }
+            else if(recent(8)) { p.dir = 0; td_moving = !col_range_x(0x01, bottom + 1, left, right); }
+
+            register_player_collision();
+            if(td_moving)
+            {
+                // Walking into an actor stops the step (and registers a hit with it).
+                const int hit = actor_in_front(p);
+                if(hit > 0)
+                {
+                    if(actors[hit].collision_group & COLLISION_GROUP_MASK) player_collision_actor = hit;
+                    td_moving = false;
+                }
+            }
+
+            const int step = topdown_grid == 16 ? 2 : 1;
+            switch(p.dir)
+            {
+            case 1: td_max = uint16_t(((p.x >> 8) + step) << 8); break;
+            case 3: td_max = uint16_t(((p.x >> 8) - step) << 8); break;
+            case 0: td_max = uint16_t(((p.y >> 8) + step) << 8); break;
+            default: td_max = uint16_t(((p.y >> 8) - step) << 8); break;
+            }
+        }
+
+        if(td_moving)
+        {
+            // Walk at the move speed, clamped to the end of the step.
+            const uint8_t spd = p.move_speed;
+            switch(p.dir)
+            {
+            case 1: p.x = uint16_t(p.x + spd); if(p.x > td_max) p.x = td_max; break;
+            case 0: p.y = uint16_t(p.y + spd); if(p.y > td_max) p.y = td_max; break;
+            case 3:
+            {
+                const uint16_t n = uint16_t(p.x - spd);
+                p.x = (n < td_max || (td_max == 0 && n >= 0xFFFF - spd)) ? td_max : n;
+                break;
+            }
+            default:
+            {
+                const uint16_t n = uint16_t(p.y - spd);
+                p.y = (n < td_max || (td_max == 0 && n >= 0xFFFF - spd)) ? td_max : n;
+                break;
+            }
+            }
+        }
+        p.moving = td_moving;
+    }
+}
+
+int hw_player_on_grid(void)
+{
+    return (gba_current_scene_type != GBA_SCENE_TOPDOWN || on_grid(actors[0])) ? 1 : 0;
+}
+
 void hw_player_update(void)
 {
-    // Built-in top-down control: move the player (actor 0) from the live d-pad.
-    // Horizontal + vertical can combine (8-way); facing prefers the horizontal axis.
+    // Built-in player control: move the player (actor 0) from the live d-pad.
     if(!player_move_enabled) return;
-    // M13a/b dispatch: PLATFORM runs its own physics; SHMUP/ADVENTURE (M13f)
-    // still use the top-down controller below.
+    // M13a/b dispatch: PLATFORM runs its own physics; TOPDOWN steps on a grid (gbs2 G5);
+    // ADVENTURE (M13f) uses the free 8-way controller below.
     if(gba_current_scene_type == 1) { platform_update(); return; }
     if(gba_current_scene_type == 3) { shmup_update(); return; }   // M13f SHMUP
     if(gba_current_scene_type == 4) { pointnclick_update(); return; } // gbs2 G2 POINTNCLICK
     Actor& p = actors[0];
     if(!p.active) return;
-    // Face + animate toward the held direction, but only advance into open tiles.
+    if(gba_current_scene_type == GBA_SCENE_TOPDOWN) { topdown_update(p); return; }
+    // ADVENTURE: horizontal + vertical can combine (8-way); facing prefers the horizontal
+    // axis. Face + animate toward the held direction, but only advance into open tiles.
     const uint8_t spd = p.move_speed;
     if(k_right_held())     { p.dir = 1; p.moving = true; const uint16_t n = p.x + spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
     else if(k_left_held()) { p.dir = 3; p.moving = true; const uint16_t n = p.x - spd; if(!is_solid_subpx(n, p.y)) p.x = n; }
     if(k_up_held())        { if(!p.moving) p.dir = 2; p.moving = true; const uint16_t n = p.y - spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
     else if(k_down_held()) { if(!p.moving) p.dir = 0; p.moving = true; const uint16_t n = p.y + spd; if(!is_solid_subpx(p.x, n)) p.y = n; }
-    // gbs2 G3b: the actor check of gbvm's TOPDOWN and ADVENTURE updates. gbvm's TOPDOWN
-    // makes it each time the player lands on a grid tile; gbavm moves freely, so it
-    // checks every frame.
+    // gbs2 G3b: the actor check of gbvm's ADVENTURE update, every frame.
     register_player_collision();
 }
 

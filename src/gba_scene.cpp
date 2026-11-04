@@ -158,6 +158,7 @@ extern "C" void gba_check_triggers(void)
     if(hw_player_blank()) return;
     const GbaScene & s = gba_scenes[current_scene];
     if(s.scene_type == 4) { gba_pointnclick_update(s); return; }   // gbs2 G2 POINTNCLICK
+    if(!hw_player_on_grid()) return; // gbs2 G5: a TOPDOWN player tests triggers on landing
     // gbs2 G5: any tile under the player's box counts, as in gbvm - the tile at its
     // origin alone missed gbs2's exit from Path to Sample Town, which the player reaches
     // against a wall. A platformer re-fires the trigger it stands in when Up goes down
@@ -185,6 +186,7 @@ extern "C" void gba_check_interact(void)
 {
     // POINTNCLICK interacts through the cursor instead (gba_pointnclick_update).
     if(gba_scenes[current_scene].scene_type == 4) return;
+    if(!hw_player_on_grid()) return; // gbs2 G5: TOPDOWN interacts only on the grid, as gbvm
     const int actor = hw_interact_actor();
     if(actor < 0) return;
     const GbaScene & s = gba_scenes[current_scene];

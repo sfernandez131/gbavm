@@ -88,6 +88,9 @@ void hw_set_cursor_hover(int hover);
 int hw_a_pressed(void);
 // gbs2 G5: 1 when Up went down this frame (a platformer re-fires its trigger on it).
 int hw_up_pressed(void);
+// gbs2 G5: 0 while a TOPDOWN player is between grid squares (triggers and interaction
+// wait for it to land, as in gbvm); 1 otherwise, and in every other scene type.
+int hw_player_on_grid(void);
 
 // --- actor movement (VM_ACTOR_MOVE_TO_* / SET_DIR) ---
 // GB Studio's "Move To" compiles to MOVE_TO_INIT (set destination) then per-axis
