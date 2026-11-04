@@ -476,8 +476,9 @@ namespace
     int shake_total = 0;                         // total shake length, for amplitude decay
 
     // GBVM actor subpixels -> Butano world pixels. The scene is centred on the world
-    // origin (the bg content is centred on its padded map, which create_bg(0,0) puts
-    // at the origin), so screen placement is left to the camera.
+    // origin (the bg content is centred on its padded map, on the tile grid, and the
+    // generated gba_create_scene_bg shifts the bg by the 0 or 4 px that rounding cost),
+    // so screen placement is left to the camera.
     bn::fixed to_world_x(uint16_t sx) { return bn::fixed(int(sx) / SUBPX - scene_w_px / 2); }
     bn::fixed to_world_y(uint16_t sy) { return bn::fixed(int(sy) / SUBPX - scene_h_px / 2); }
 
