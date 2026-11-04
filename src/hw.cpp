@@ -612,8 +612,13 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     // regular bg; the transform op then rotates/scales it. Non-affine scenes
     // are unchanged (gba_create_scene_affine_bg returns nullopt in that case).
     bg_rot = 0; bg_scale = 1; gba_bg_angle = 0; gba_bg_spin = 0; gba_bg_scale = 256;
-    // G4: free the old scene's bands first. Butano has four bg slots, and the new scene
-    // bg is created while the old one still holds its slot.
+    // G5: free the old scene's backgrounds before creating the new ones. A GBC colour
+    // background holds 8 of the 16 bg palettes, so the old one, the new one and the
+    // dialogue panel's would need 17 and Butano asserts; the four bg slots run out too
+    // once a scene has parallax bands (G4). Nothing draws in between: Butano commits
+    // the new bgs at the frame's update.
+    scene_bg.reset();
+    scene_affine_bg.reset();
     for(int b = 0; b < MAX_PARALLAX_BANDS; ++b)
     {
         parallax_bgs[b].reset();
@@ -623,7 +628,6 @@ void hw_load_scene(int scene_idx, int width_px, int height_px)
     scene_affine_bg = gba_create_scene_affine_bg(scene_idx);
     if(scene_affine_bg)
     {
-        scene_bg.reset();
         scene_affine_bg->set_camera(*camera);
     }
     else
