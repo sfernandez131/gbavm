@@ -92,7 +92,9 @@ int hw_a_pressed(void);
 // GB Studio's "Move To" compiles to MOVE_TO_INIT (set destination) then per-axis
 // blocking MOVE_TO_X / MOVE_TO_Y (or MOVE_TO_XY for diagonal), with SET_DIR_X/Y
 // in between to face the travel direction.
-void hw_actor_move_init(int16_t id, uint16_t dest_x, uint16_t dest_y);
+// `dest` is the ref block's {X, Y}; `attr` is GB's ACTOR_ATTR_* byte. A relative move
+// (RELATIVE_SNAP_PX / _TILE) is resolved against the actor and written back to `dest`.
+void hw_actor_move_init(int16_t id, uint16_t* dest, uint8_t attr);
 int  hw_actor_move_step(int16_t id, uint8_t axis); // axis 0=X 1=Y 2=both; 1 when arrived
 void hw_actor_move_set_dir(int16_t id, uint8_t axis); // face toward dest along axis 0=X 1=Y
 void hw_actor_move_cancel(int16_t id);              // stop moving (clear destination)

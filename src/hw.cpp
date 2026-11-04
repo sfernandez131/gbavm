@@ -2317,11 +2317,37 @@ static bool move_axis(uint16_t& pos, uint16_t dest, uint16_t cross, bool axis_x,
     return pos == dest;
 }
 
-void hw_actor_move_init(int16_t id, uint16_t dest_x, uint16_t dest_y)
+// GB Studio move-to attribute bits (gbvm vm_actor.h; the editor's bridge emits the
+// same numbers). Only the relative bits change the destination here; collisions and
+// axis order come from the emitted op sequence.
+static constexpr uint8_t ACTOR_ATTR_RELATIVE_SNAP_PX = 0x08;
+static constexpr uint8_t ACTOR_ATTR_RELATIVE_SNAP_TILE = 0x10;
+
+// gbvm math.h saturating_add_u16: base + a signed delta, clamped to 0..0xFFFF.
+static uint16_t saturating_add_u16(uint16_t base, int16_t delta)
+{
+    const int sum = int(base) + delta;
+    return sum < 0 ? 0 : (sum > 0xFFFF ? 0xFFFF : uint16_t(sum));
+}
+
+// gbvm vm_actor_move_to_init: snap the actor to a whole pixel, then resolve a relative
+// destination (offset from that position, then snapped to a pixel or tile) and write
+// it back into the {X, Y} block like GB does, before it becomes the move target.
+void hw_actor_move_init(int16_t id, uint16_t* dest, uint8_t attr)
 {
     if(id < 0 || id >= MAX_ACTORS) return;
-    actors[id].dest_x = dest_x;
-    actors[id].dest_y = dest_y;
+    Actor& a = actors[id];
+    a.x &= 0xFFE0; // SUBPX_SNAP_PX
+    a.y &= 0xFFE0;
+    if(attr & (ACTOR_ATTR_RELATIVE_SNAP_PX | ACTOR_ATTR_RELATIVE_SNAP_TILE))
+    {
+        dest[0] = saturating_add_u16(a.x, int16_t(dest[0]));
+        dest[1] = saturating_add_u16(a.y, int16_t(dest[1]));
+    }
+    if(attr & ACTOR_ATTR_RELATIVE_SNAP_PX)        { dest[0] &= 0xFFE0; dest[1] &= 0xFFE0; } // SUBPX_SNAP_PX
+    else if(attr & ACTOR_ATTR_RELATIVE_SNAP_TILE) { dest[0] &= 0xFF00; dest[1] &= 0xFF00; } // SUBPX_SNAP_TILE
+    a.dest_x = dest[0];
+    a.dest_y = dest[1];
 }
 
 int hw_actor_move_step(int16_t id, uint8_t axis)
