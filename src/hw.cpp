@@ -1661,22 +1661,35 @@ void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_ti
     coll_h = height_tiles;
 }
 
-// M6c: when the player presses A and faces an adjacent placed actor (no dialogue up),
-// return that actor's runtime index so its interact script can run; else -1. The "front"
-// tile is the player's tile stepped one unit in their facing direction. text_showing
-// gates it so A dismisses an open dialogue instead of re-triggering the same NPC.
-int hw_interact_actor(void)
+extern "C" uint8_t topdown_grid; // engine field, defined with the top-down grid below
+
+// M6c: when the player presses A (no dialogue up), return the runtime index of the actor
+// it would interact with, else -1. text_showing gates it so A dismisses an open dialogue
+// instead of re-triggering the same NPC.
+// gbs2 G5: gbvm's actor_with_script_in_front_of_player - the player's box moved one grid
+// square ahead in its facing direction (topdown_grid in TOPDOWN, 8 px elsewhere), and the
+// first actor with a script whose box it overlaps. It used to compare the tile in front of
+// the player's origin with each actor's origin tile, which misses an actor wider or taller
+// than a tile from two of its sides: gbs2's Underground ice block could then be pushed
+// only from its left or from below.
+int hw_interact_actor(int (*has_script)(int actor))
 {
     if(text_showing) return -1;
     if(!k_a_pressed()) return -1;
     const Actor& p = actors[0];
     if(!p.active) return -1;
-    int fx = (int)p.x / SUBPX / 8, fy = (int)p.y / SUBPX / 8;
-    switch(p.dir) { case 0: ++fy; break; case 1: ++fx; break; case 2: --fy; break; default: --fx; break; }
+    const int d = (gba_current_scene_type == GBA_SCENE_TOPDOWN ? topdown_grid : 8) * SUBPX;
+    int ox = 0, oy = 0;
+    switch(p.dir) { case 0: oy = d; break; case 1: ox = d; break; case 2: oy = -d; break; default: ox = -d; break; }
+    const uint16_t l = uint16_t(p.x + ox + p.b_left), r = uint16_t(p.x + ox + p.b_right);
+    const uint16_t t = uint16_t(p.y + oy + p.b_top), b = uint16_t(p.y + oy + p.b_bottom);
     for(int i = 1; i < MAX_ACTORS; ++i)
     {
         const Actor& a = actors[i];
-        if(a.active && (int)a.x / SUBPX / 8 == fx && (int)a.y / SUBPX / 8 == fy) return i;
+        if(!a.active || !has_script(i)) continue;
+        if(uint16_t(a.x + a.b_left) > r || uint16_t(a.x + a.b_right) < l ||
+           uint16_t(a.y + a.b_top) > b || uint16_t(a.y + a.b_bottom) < t) continue;
+        return i;
     }
     return -1;
 }
@@ -1712,6 +1725,8 @@ void hw_set_cursor_hover(int hover) { actors[0].dir = hover ? 1 : 0; }
 int hw_a_pressed(void) { return (!text_showing && k_a_pressed()) ? 1 : 0; }
 
 int hw_up_pressed(void) { return k_up_pressed() ? 1 : 0; }
+
+int hw_player_dir(void) { return actors[0].dir; }
 
 // M6c: 1 while a dialogue box is on screen. The main loop samples this at the start of a
 // frame so the A press that dismisses a dialogue isn't also read as a fresh interaction
@@ -1751,23 +1766,103 @@ namespace
         return collisions ? collisions[ty * coll_w + tx] : 0;
     }
 
-    // gbvm's tile_col_test_range_y / _x: does any tile of the column (row) range have a
-    // bit of `mask` set?
-    bool col_range_y(uint8_t mask, int tx, int ty0, int ty1)
+    // gbvm's tile_col_test_range_y / _x: walk the column (row) range from its first tile
+    // to its last; the first tile with a bit of `mask` set is a hit, its row (column) in
+    // *hit. Off the scene counts as every bit, so a scan running off an edge hits there.
+    bool col_range_y(uint8_t mask, int tx, int ty0, int ty1, int* hit = nullptr)
     {
         for(int ty = ty0; ; ty += ty0 < ty1 ? 1 : -1)
         {
-            if(tile_bits(tx, ty) & mask) return true;
+            if(tile_bits(tx, ty) & mask) { if(hit) *hit = ty; return true; }
             if(ty == ty1) return false;
         }
     }
-    bool col_range_x(uint8_t mask, int ty, int tx0, int tx1)
+    bool col_range_x(uint8_t mask, int ty, int tx0, int tx1, int* hit = nullptr)
     {
         for(int tx = tx0; ; tx += tx0 < tx1 ? 1 : -1)
         {
-            if(tile_bits(tx, ty) & mask) return true;
+            if(tile_bits(tx, ty) & mask) { if(hit) *hit = tx; return true; }
             if(tx == tx1) return false;
         }
+    }
+
+    // gbs2 G5: gbvm's check_collision_horizontal / _vertical (vm_actor.c). Clip a move of
+    // actor `a` from (sx, sy) to `end` along one axis at the first wall any row (column)
+    // of its box would meet, and return where the move may stop. Tiles are bytes, as in
+    // gbvm's SUBPX_TO_TILE.
+    uint16_t clip_move_x(const Actor& a, uint16_t sx, uint16_t sy, uint16_t end)
+    {
+        int ty1 = uint16_t(sy + a.b_top) >> 8;
+        const int ty2 = (uint16_t(sy + a.b_bottom) >> 8) + 1;
+        int tx1, tx2;
+        uint8_t mask;
+        if(sx > end)
+        {
+            mask = 0x08; // COLLISION_RIGHT
+            tx1 = uint16_t(sx + a.b_left) >> 8;
+            tx2 = uint16_t(end + a.b_left) >> 8;
+            if(tx2 > tx1) tx2 = 0;
+        }
+        else
+        {
+            mask = 0x04; // COLLISION_LEFT
+            tx1 = uint16_t(sx + a.b_right) >> 8;
+            tx2 = uint16_t(end + a.b_right) >> 8;
+            if(tx2 < tx1) tx2 = coll_w;
+        }
+        for(; ty1 != ty2; ++ty1)
+        {
+            int hit;
+            if(col_range_x(mask, ty1, tx1, tx2, &hit))
+                return sx > end ? uint16_t((hit << 8) - a.b_left + 256) : uint16_t((hit << 8) - (a.b_right + 1));
+        }
+        return end;
+    }
+    uint16_t clip_move_y(const Actor& a, uint16_t sx, uint16_t sy, uint16_t end)
+    {
+        int tx1 = uint16_t(sx + a.b_left) >> 8;
+        const int tx2 = (uint16_t(sx + a.b_right) >> 8) + 1;
+        int ty1, ty2;
+        uint8_t mask;
+        if(sy > end)
+        {
+            mask = 0x02; // COLLISION_BOTTOM
+            ty1 = uint16_t(sy + a.b_top) >> 8;
+            ty2 = uint16_t(end + a.b_top) >> 8;
+            if(ty2 > ty1) ty2 = 0;
+        }
+        else
+        {
+            mask = 0x01; // COLLISION_TOP
+            ty1 = uint16_t(sy + a.b_bottom) >> 8;
+            ty2 = uint16_t(end + a.b_bottom) >> 8;
+            if(ty2 < ty1) ty2 = coll_h;
+        }
+        for(; tx1 != tx2; ++tx1)
+        {
+            int hit;
+            if(col_range_y(mask, tx1, ty1, ty2, &hit))
+                return sy > end ? uint16_t((hit << 8) - a.b_top + 256) : uint16_t((hit << 8) - (a.b_bottom + 1));
+        }
+        return end;
+    }
+
+    // gbvm's actor_overlapping_bb: the first collidable actor other than `self` (the
+    // player included) whose box overlaps self's box where it stands, or -1.
+    int actor_overlapping_actor(int self)
+    {
+        const Actor& s = actors[self];
+        const uint16_t l = uint16_t(s.x + s.b_left), r = uint16_t(s.x + s.b_right);
+        const uint16_t t = uint16_t(s.y + s.b_top), b = uint16_t(s.y + s.b_bottom);
+        for(int i = 0; i < MAX_ACTORS; ++i)
+        {
+            const Actor& a = actors[i];
+            if(i == self || !a.active || !a.coll_enabled) continue;
+            if(uint16_t(a.x + a.b_left) > r || uint16_t(a.x + a.b_right) < l ||
+               uint16_t(a.y + a.b_top) > b || uint16_t(a.y + a.b_bottom) < t) continue;
+            return i;
+        }
+        return -1;
     }
 
     // gbvm's actor_in_front_of_player: the first collidable actor the player's box would
@@ -2530,24 +2625,26 @@ void hw_actor_place(int16_t id, uint16_t x, uint16_t y, uint8_t dir)
 }
 
 // Move one axis toward the destination by the actor's speed, snapping when within
-// range. `cross` is the other axis' position (for the collision check). Returns true
-// once that axis reaches its target OR a solid tile blocks it (the move stops there).
-static bool move_axis(uint16_t& pos, uint16_t dest, uint16_t cross, bool axis_x, uint8_t speed)
+// range. Returns true once that axis reaches its target. gbs2 G5: walls are not tested
+// here - a move that checks them had its destination clipped at init, as in gbvm, and
+// one that doesn't walks through them (Actor Move's "use collisions" off).
+static bool move_axis(uint16_t& pos, uint16_t dest, uint8_t speed)
 {
     const int d = int(dest) - int(pos);
     if(d == 0) return true;
-    const uint16_t step = (d > 0) ? ((d <= speed) ? dest : (uint16_t)(pos + speed))
-                                  : ((-d <= speed) ? dest : (uint16_t)(pos - speed));
-    if(axis_x ? is_solid_subpx(step, cross) : is_solid_subpx(cross, step)) return true; // blocked: stop
-    pos = step;
+    pos = (d > 0) ? ((d <= speed) ? dest : (uint16_t)(pos + speed))
+                  : ((-d <= speed) ? dest : (uint16_t)(pos - speed));
     return pos == dest;
 }
 
 // GB Studio move-to attribute bits (gbvm vm_actor.h; the editor's bridge emits the
 // same numbers). Only the relative bits change the destination here; collisions and
 // axis order come from the emitted op sequence.
+static constexpr uint8_t ACTOR_ATTR_H_FIRST = 0x01;
+static constexpr uint8_t ACTOR_ATTR_CHECK_COLL_WALLS = 0x02;
 static constexpr uint8_t ACTOR_ATTR_RELATIVE_SNAP_PX = 0x08;
 static constexpr uint8_t ACTOR_ATTR_RELATIVE_SNAP_TILE = 0x10;
+static constexpr uint8_t ACTOR_ATTR_CHECK_COLL_ACTORS = 0x20;
 
 // gbvm math.h saturating_add_u16: base + a signed delta, clamped to 0..0xFFFF.
 static uint16_t saturating_add_u16(uint16_t base, int16_t delta)
@@ -2572,17 +2669,45 @@ void hw_actor_move_init(int16_t id, uint16_t* dest, uint8_t attr)
     }
     if(attr & ACTOR_ATTR_RELATIVE_SNAP_PX)        { dest[0] &= 0xFFE0; dest[1] &= 0xFFE0; } // SUBPX_SNAP_PX
     else if(attr & ACTOR_ATTR_RELATIVE_SNAP_TILE) { dest[0] &= 0xFF00; dest[1] &= 0xFF00; } // SUBPX_SNAP_TILE
+    // gbs2 G5: a move that checks walls stops at the first one its bounding box meets, in
+    // the order it moves (gbvm clips the destination here, once). The point test this
+    // replaces stopped an actor when its origin entered a wall, so gbs2's ice block, whose
+    // box reaches a tile above its origin, slid a tile into the wall.
+    if(attr & ACTOR_ATTR_CHECK_COLL_WALLS)
+    {
+        if(attr & ACTOR_ATTR_H_FIRST)
+        {
+            if(a.x != dest[0]) dest[0] = clip_move_x(a, a.x, a.y, dest[0]);
+            if(a.y != dest[1]) dest[1] = clip_move_y(a, dest[0], a.y, dest[1]);
+        }
+        else
+        {
+            if(a.y != dest[1]) dest[1] = clip_move_y(a, a.x, a.y, dest[1]);
+            if(a.x != dest[0]) dest[0] = clip_move_x(a, a.x, dest[1], dest[0]);
+        }
+    }
     a.dest_x = dest[0];
     a.dest_y = dest[1];
 }
 
-int hw_actor_move_step(int16_t id, uint8_t axis)
+int hw_actor_move_step(int16_t id, uint8_t axis, uint8_t attr)
 {
     if(id < 0 || id >= MAX_ACTORS) return 1;
     Actor& a = actors[id];
     bool done = true;
-    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x, a.y, true, a.move_speed);
-    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y, a.x, false, a.move_speed);
+    const uint16_t from_x = a.x, from_y = a.y;
+    if(axis == 0 || axis == 2) done &= move_axis(a.x, a.dest_x, a.move_speed);
+    if(axis == 1 || axis == 2) done &= move_axis(a.y, a.dest_y, a.move_speed);
+    // gbs2 G5: gbvm's vm_actor_move_to_x/_y - with actor collisions on, a step into another
+    // actor is taken back and the move ends there (gbs2's pushed rocks and ice block).
+    if((attr & ACTOR_ATTR_CHECK_COLL_ACTORS) && actor_overlapping_actor(id) >= 0)
+    {
+        a.x = from_x;
+        a.y = from_y;
+        a.dest_x = a.x;
+        a.dest_y = a.y;
+        return 1;
+    }
     a.moving = true; // animate as walking until the move op stops re-running
     return done ? 1 : 0;
 }

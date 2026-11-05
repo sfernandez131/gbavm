@@ -49,8 +49,9 @@ void hw_set_collisions(const unsigned char* grid, int width_tiles, int height_ti
 int hw_player_blank(void);
 // M6c: if the player just pressed A while facing an adjacent placed actor (and no
 // dialogue is up), return that actor's runtime index so its interact script can run;
-// otherwise -1.
-int hw_interact_actor(void);
+// otherwise -1. has_script says whether a runtime actor has an interact script (gbs2 G5:
+// gbvm takes the first scripted actor one grid square ahead).
+int hw_interact_actor(int (*has_script)(int actor));
 // M6c: 1 while a dialogue box is on screen (sampled at frame start by the main loop so a
 // dismiss A-press isn't also read as an interaction).
 int hw_dialogue_active(void);
@@ -88,6 +89,8 @@ void hw_set_cursor_hover(int hover);
 int hw_a_pressed(void);
 // gbs2 G5: 1 when Up went down this frame (a platformer re-fires its trigger on it).
 int hw_up_pressed(void);
+// gbs2 G5: the player's facing (0 down, 1 right, 2 up, 3 left).
+int hw_player_dir(void);
 // gbs2 G5: 0 while a TOPDOWN player is between grid squares (triggers and interaction
 // wait for it to land, as in gbvm); 1 otherwise, and in every other scene type.
 int hw_player_on_grid(void);
@@ -99,7 +102,7 @@ int hw_player_on_grid(void);
 // `dest` is the ref block's {X, Y}; `attr` is GB's ACTOR_ATTR_* byte. A relative move
 // (RELATIVE_SNAP_PX / _TILE) is resolved against the actor and written back to `dest`.
 void hw_actor_move_init(int16_t id, uint16_t* dest, uint8_t attr);
-int  hw_actor_move_step(int16_t id, uint8_t axis); // axis 0=X 1=Y 2=both; 1 when arrived
+int  hw_actor_move_step(int16_t id, uint8_t axis, uint8_t attr); // axis 0=X 1=Y 2=both; attr: the move-to bits; 1 when arrived
 void hw_actor_move_set_dir(int16_t id, uint8_t axis); // face toward dest along axis 0=X 1=Y
 void hw_actor_move_cancel(int16_t id);              // stop moving (clear destination)
 void hw_actor_set_dir(int16_t id, uint8_t dir);     // 0x34 explicit facing

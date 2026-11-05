@@ -182,26 +182,34 @@ extern "C" void gba_check_triggers(void)
 // gbs2 G3b: an actor with a collision group is never interacted with - its script's
 // argument-0 section is its On Hit: Player tab, which runs when the player touches it
 // (hw_player_collision_update). gbvm's TOPDOWN, PLATFORM and ADVENTURE skip it the same way.
+// The scene data of a runtime actor, or null.
+static const GbaActorInit * actor_init_of(int actor)
+{
+    const GbaScene & s = gba_scenes[current_scene];
+    for(unsigned int i = 0; i < s.actors_init_count; ++i)
+        if(s.actors_init[i].index == (unsigned char)actor) return &s.actors_init[i];
+    return nullptr;
+}
+
+static int actor_has_interact(int actor)
+{
+    const GbaActorInit * ai = actor_init_of(actor);
+    return (ai && ai->interact) ? 1 : 0;
+}
+
 extern "C" void gba_check_interact(void)
 {
     // POINTNCLICK interacts through the cursor instead (gba_pointnclick_update).
     if(gba_scenes[current_scene].scene_type == 4) return;
     if(!hw_player_on_grid()) return; // gbs2 G5: TOPDOWN interacts only on the grid, as gbvm
-    const int actor = hw_interact_actor();
+    const int actor = hw_interact_actor(actor_has_interact);
     if(actor < 0) return;
-    const GbaScene & s = gba_scenes[current_scene];
-    for(unsigned int i = 0; i < s.actors_init_count; ++i)
-    {
-        const GbaActorInit & ai = s.actors_init[i];
-        if(ai.index == (unsigned char)actor)
-        {
-            if(!ai.interact || (ai.collision_group & 0x0F)) return;
-            // Pass parameter 0 (M10g), as gbvm does. Plain interact scripts never
-            // read the arg.
-            script_execute(0, ai.interact, nullptr, 1, 0);
-            return;
-        }
-    }
+    const GbaActorInit * ai = actor_init_of(actor);
+    if(!ai || (ai->collision_group & 0x0F)) return;
+    // gbvm's TOPDOWN turns the actor to face the player first (gbs2 G5).
+    if(gba_scenes[current_scene].scene_type == GBA_SCENE_TOPDOWN) hw_actor_set_dir(int16_t(actor), uint8_t(hw_player_dir() ^ 2));
+    // Pass parameter 0 (M10g), as gbvm does. Plain interact scripts never read the arg.
+    script_execute(0, ai->interact, nullptr, 1, 0);
 }
 
 // Scene stack (VM_SCENE_PUSH/POP/POP_ALL). The VM calls these via extern "C";
