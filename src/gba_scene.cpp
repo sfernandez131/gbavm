@@ -78,6 +78,7 @@ void gba_load_scene(unsigned int idx)
         // player (actor 0) uses the scene's player-hit script instead.
         hw_actor_set_hit_script(ai.index, ai.index == 0 ? s.player_hit : ai.interact);
     }
+    hw_topdown_init(); // gbvm's state_init, once the player stands where it arrives (gbs2 G5)
 
     // Preload the scene's projectile defs into the runtime slots (M10f) - GB
     // data_manager parity, so Launch Projectile works with no load op.
@@ -101,6 +102,23 @@ void gba_load_scene(unsigned int idx)
     }
 }
 
+// gbvm's trigger_at_intersection: the tiles under the player's bounding box
+// (SUBPX_TO_TILE is `>> 8` to a byte) against each trigger's inclusive tile rect; the
+// first hit wins. -1 for none (or no active player).
+static int trigger_at_intersection(const GbaScene & s)
+{
+    uint16_t l, r, t, b;
+    int collide;
+    if(!hw_actor_abs_bounds(0, &l, &r, &t, &b, &collide)) return -1;
+    const uint8_t tl = uint8_t(l >> 8), tr = uint8_t(r >> 8), tt = uint8_t(t >> 8), tb = uint8_t(b >> 8);
+    for(unsigned int i = 0; i < s.triggers_count; ++i)
+    {
+        const GbaTrigger & g = s.triggers[i];
+        if(tl <= g.x + g.w - 1 && tr >= g.x && tt <= g.y + g.h - 1 && tb >= g.y) return (int)i;
+    }
+    return -1;
+}
+
 // Trigger zones (M6b): each frame, fire the script of the trigger the player just
 // entered. current_trigger debounces it (re-runs only after leaving + re-entering);
 // the script runs as a new thread, like the scene init (it may switch scene, save, etc.).
@@ -113,23 +131,7 @@ void gba_load_scene(unsigned int idx)
 // state update, the main loop skips it while the VM is locked.
 static void gba_pointnclick_update(const GbaScene & s)
 {
-    uint16_t l, r, t, b;
-    int collide;
-    if(!hw_actor_abs_bounds(0, &l, &r, &t, &b, &collide)) return;
-
-    // trigger_at_intersection: the box's tile range (SUBPX_TO_TILE is `>> 8` to a byte)
-    // against each trigger's inclusive tile rect; the first hit wins.
-    const uint8_t tl = uint8_t(l >> 8), tr = uint8_t(r >> 8), tt = uint8_t(t >> 8), tb = uint8_t(b >> 8);
-    int hit_trigger = -1;
-    for(unsigned int i = 0; i < s.triggers_count; ++i)
-    {
-        const GbaTrigger & g = s.triggers[i];
-        if(tl <= g.x + g.w - 1 && tr >= g.x && tt <= g.y + g.h - 1 && tb >= g.y)
-        {
-            hit_trigger = (int)i;
-            break;
-        }
-    }
+    const int hit_trigger = trigger_at_intersection(s);
 
     // actor_overlapping_player: the first collidable actor whose box overlaps the cursor's.
     const int hit = hw_actor_overlapping_player();
@@ -157,13 +159,14 @@ extern "C" void gba_check_triggers(void)
     if(hw_player_blank()) return;
     const GbaScene & s = gba_scenes[current_scene];
     if(s.scene_type == 4) { gba_pointnclick_update(s); return; }   // gbs2 G2 POINTNCLICK
-    int in = -1;
-    for(unsigned int i = 0; i < s.triggers_count; ++i)
-    {
-        const GbaTrigger & t = s.triggers[i];
-        if(hw_player_in_rect(t.x, t.y, t.w, t.h)) { in = (int)i; break; }
-    }
-    if(in != current_trigger)
+    if(!hw_player_on_grid()) return; // gbs2 G5: a TOPDOWN player tests triggers on landing
+    // gbs2 G5: any tile under the player's box counts, as in gbvm - the tile at its
+    // origin alone missed gbs2's exit from Path to Sample Town, which the player reaches
+    // against a wall. A platformer re-fires the trigger it stands in when Up goes down
+    // (INPUT_PLATFORM_FORCE_TRIGGER): gbs2's door to Player's House checks for Up.
+    const int in = trigger_at_intersection(s);
+    const bool force = s.scene_type == GBA_SCENE_PLATFORM && hw_up_pressed();
+    if(in != current_trigger || (force && in >= 0))
     {
         current_trigger = in;
         // Parameter 1 = the on-enter section (M10g): a trigger with BOTH enter and
@@ -180,25 +183,34 @@ extern "C" void gba_check_triggers(void)
 // gbs2 G3b: an actor with a collision group is never interacted with - its script's
 // argument-0 section is its On Hit: Player tab, which runs when the player touches it
 // (hw_player_collision_update). gbvm's TOPDOWN, PLATFORM and ADVENTURE skip it the same way.
+// The scene data of a runtime actor, or null.
+static const GbaActorInit * actor_init_of(int actor)
+{
+    const GbaScene & s = gba_scenes[current_scene];
+    for(unsigned int i = 0; i < s.actors_init_count; ++i)
+        if(s.actors_init[i].index == (unsigned char)actor) return &s.actors_init[i];
+    return nullptr;
+}
+
+static int actor_has_interact(int actor)
+{
+    const GbaActorInit * ai = actor_init_of(actor);
+    return (ai && ai->interact) ? 1 : 0;
+}
+
 extern "C" void gba_check_interact(void)
 {
     // POINTNCLICK interacts through the cursor instead (gba_pointnclick_update).
     if(gba_scenes[current_scene].scene_type == 4) return;
-    const int actor = hw_interact_actor();
+    if(!hw_player_on_grid()) return; // gbs2 G5: TOPDOWN interacts only on the grid, as gbvm
+    const int actor = hw_interact_actor(actor_has_interact);
     if(actor < 0) return;
-    const GbaScene & s = gba_scenes[current_scene];
-    for(unsigned int i = 0; i < s.actors_init_count; ++i)
-    {
-        const GbaActorInit & ai = s.actors_init[i];
-        if(ai.index == (unsigned char)actor)
-        {
-            if(!ai.interact || (ai.collision_group & 0x0F)) return;
-            // Pass parameter 0 (M10g), as gbvm does. Plain interact scripts never
-            // read the arg.
-            script_execute(0, ai.interact, nullptr, 1, 0);
-            return;
-        }
-    }
+    const GbaActorInit * ai = actor_init_of(actor);
+    if(!ai || (ai->collision_group & 0x0F)) return;
+    // gbvm's TOPDOWN turns the actor to face the player first (gbs2 G5).
+    if(gba_scenes[current_scene].scene_type == GBA_SCENE_TOPDOWN) hw_actor_set_dir(int16_t(actor), uint8_t(hw_player_dir() ^ 2));
+    // Pass parameter 0 (M10g), as gbvm does. Plain interact scripts never read the arg.
+    script_execute(0, ai->interact, nullptr, 1, 0);
 }
 
 // Scene stack (VM_SCENE_PUSH/POP/POP_ALL). The VM calls these via extern "C";

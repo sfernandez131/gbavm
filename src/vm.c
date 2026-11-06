@@ -677,9 +677,9 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // MOVE_TO_X/Y/XY block (rewind past opcode + its 3 operand bytes) until arrival.
         case 0x32: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_init((INT16)r[0], &r[1], A_U8(2)); break; }
         case 0x34: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_dir((INT16)r[0], A_U8(2)); break; }
-        case 0x36: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 0)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
-        case 0x37: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 1)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
-        case 0x38: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 2)) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
+        case 0x36: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 0, A_U8(2))) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
+        case 0x37: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 1, A_U8(2))) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
+        case 0x38: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); if (!hw_actor_move_step((INT16)r[0], 2, A_U8(2))) { THIS->PC -= (INSTRUCTION_SIZE + 3); THIS->waitable = TRUE; } break; }
         case 0x39: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_set_dir((INT16)r[0], 0); break; }
         case 0x3B: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_move_set_dir((INT16)r[0], 1); break; }
         case 0x3C: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0)); hw_actor_set_moving((INT16)r[0]); break; }
@@ -727,7 +727,7 @@ UBYTE VM_STEP(SCRIPT_CTX * THIS) {
         // vm_actor_move_to), so a relative move doesn't re-add its offset every frame.
         case 0x46: { uint16_t *r = (uint16_t *)vm_resolve_ref(THIS, A_I16(0));
                      if (!THIS->flags) { hw_actor_move_init((INT16)r[0], &r[1], (UBYTE)r[3]); THIS->flags = 1; }
-                     if (!hw_actor_move_step((INT16)r[0], 2)) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; }
+                     if (!hw_actor_move_step((INT16)r[0], 2, (UBYTE)r[3])) { THIS->PC -= (INSTRUCTION_SIZE + 2); THIS->waitable = TRUE; }
                      else THIS->flags = 0;
                      break; }
         // Camera control (slice E). MOVE_TO blocks the thread until both axes arrive,
