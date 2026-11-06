@@ -1960,6 +1960,17 @@ int hw_player_on_grid(void)
     return (gba_current_scene_type != GBA_SCENE_TOPDOWN || on_grid(actors[0])) ? 1 : 0;
 }
 
+// gbvm's topdown_init: a TOPDOWN scene starts with the player snapped onto the grid (a
+// 16 px grid square's origin sits a tile below its top, as on_grid expects). Input is read
+// only on the grid, so a player placed off it would never move again.
+void hw_topdown_init(void)
+{
+    if(gba_current_scene_type != GBA_SCENE_TOPDOWN) return;
+    Actor& p = actors[0];
+    if(topdown_grid == 16) { p.x &= 0xFE00; p.y = uint16_t((p.y & 0xFE00) + 0x100); }
+    else                   { p.x &= 0xFF00; p.y &= 0xFF00; }
+}
+
 void hw_player_update(void)
 {
     // Built-in player control: move the player (actor 0) from the live d-pad.

@@ -94,6 +94,8 @@ int hw_player_dir(void);
 // gbs2 G5: 0 while a TOPDOWN player is between grid squares (triggers and interaction
 // wait for it to land, as in gbvm); 1 otherwise, and in every other scene type.
 int hw_player_on_grid(void);
+// gbs2 G5: gbvm's topdown_init - in a TOPDOWN scene, snap the placed player onto the grid.
+void hw_topdown_init(void);
 
 // --- actor movement (VM_ACTOR_MOVE_TO_* / SET_DIR) ---
 // GB Studio's "Move To" compiles to MOVE_TO_INIT (set destination) then per-axis

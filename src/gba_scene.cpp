@@ -78,6 +78,7 @@ void gba_load_scene(unsigned int idx)
         // player (actor 0) uses the scene's player-hit script instead.
         hw_actor_set_hit_script(ai.index, ai.index == 0 ? s.player_hit : ai.interact);
     }
+    hw_topdown_init(); // gbvm's state_init, once the player stands where it arrives (gbs2 G5)
 
     // Preload the scene's projectile defs into the runtime slots (M10f) - GB
     // data_manager parity, so Launch Projectile works with no load op.
