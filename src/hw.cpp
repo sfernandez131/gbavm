@@ -1019,6 +1019,9 @@ uint8_t plat_state = 0;
 uint8_t plat_next_state = 0;
 int16_t plat_vel_x = 0;
 int16_t plat_vel_y = 0;
+// gbs2 G5: gbvm's plat_grounded, set by plat_move_and_collide: 1 while the player stands on
+// the ground or a slope (an engine field scripts can read).
+uint8_t plat_grounded = 0;
 // The step plat_move_and_collide last took, in subpixels (velocity converted and
 // clamped, before collision) - the runtime test's check on platformer speed.
 int16_t gba_plat_step_x = 0;
@@ -1103,12 +1106,54 @@ namespace
         return collisions[ty * coll_w + tx];
     }
 
+    // gbvm's tile_col_test_range_y / _x (collision.c), in its byte-sized tile units: walk
+    // a column (row) of tiles from its first tile to its last and return the first tile
+    // with a bit of `mask` set, or 0. tile_hit_x / tile_hit_y name the tile it stopped on.
+    // A tile off the scene counts as COLLISION_ALL and ends the walk, so a slope mask
+    // (no edge bits) stops there with no hit.
+    uint8_t tile_hit_x = 0, tile_hit_y = 0;
+    inline uint8_t off_scene(uint8_t mask) { return (mask & 0x0F) ? 0x0F : 0; }
+    inline uint8_t tile_at(uint8_t tx, uint8_t ty) { return collisions ? collisions[ty * coll_w + tx] : 0; }
+    uint8_t tile_col_test_range_y(uint8_t mask, uint8_t tx, uint8_t ty_start, uint8_t ty_end)
+    {
+        tile_hit_x = tx;
+        tile_hit_y = ty_start;
+        if(tx >= coll_w || ty_start >= coll_h) return off_scene(mask);
+        const bool inc = ty_start < ty_end;
+        while(true)
+        {
+            const uint8_t t = tile_at(tx, tile_hit_y);
+            if(t & mask) return t;
+            if(tile_hit_y == ty_end) return 0;
+            tile_hit_y = uint8_t(inc ? tile_hit_y + 1 : tile_hit_y - 1);
+            if(tile_hit_y >= coll_h) return off_scene(mask);
+        }
+    }
+    uint8_t tile_col_test_range_x(uint8_t mask, uint8_t ty, uint8_t tx_start, uint8_t tx_end)
+    {
+        tile_hit_x = tx_start;
+        tile_hit_y = ty;
+        if(tx_start >= coll_w || ty >= coll_h) return off_scene(mask);
+        const bool inc = tx_start < tx_end;
+        while(true)
+        {
+            const uint8_t t = tile_at(tile_hit_x, ty);
+            if(t & mask) return t;
+            if(tile_hit_x == tx_end) return 0;
+            tile_hit_x = uint8_t(inc ? tile_hit_x + 1 : tile_hit_x - 1);
+            if(tile_hit_x >= coll_w) return off_scene(mask);
+        }
+    }
+
     // M13c ladders: grab with UP (ladder tile at the head) or DOWN (below the
     // feet) from GROUND/FALL, snapping x to the ladder column's centre; climb
     // with plat_climb_vel; exit by jumping (A), dropping (DOWN+A), stepping
     // onto standable ground, or pressing left/right after releasing vertical
     // input (GB's plat_ladder_block_v rule).
-    inline bool is_ladder(uint8_t t) { return (t & 0x10) != 0; }
+    // gbvm's IS_LADDER: bits 0x70 are the tile's slope or ladder kind, and 0x10 alone is a
+    // ladder. 0x10 is also a left slope's flag, so testing the bit alone took gbs2's
+    // downhill slopes (0x50, 0x70) for ladders.
+    inline bool is_ladder(uint8_t t) { return (t & 0x70) == 0x10; }
     void ladder_check(Actor& p)
     {
         if(plat_ladder_block_v)
@@ -1309,73 +1354,137 @@ namespace
         plat_jump_buffer_timer = 0;
     }
 
-    // Integrate + collide. Horizontal: blocked by the facing edge bit (moving
-    // right hits the target tile's LEFT face 0x04; moving left its RIGHT face
-    // 0x08), sampled at body centre and near the feet. Returns PLAT_LANDED when a
-    // TOP face caught the falling feet and PLAT_BUMPED when a BOTTOM face stopped
-    // the head - the two outcomes gbvm's move_and_collide turns into GROUND/FALL.
+    // gbs2 G5: gbvm's move_and_collide (platform.c), walls and tiles, with
+    // FEAT_PLATFORM_SLOPES. The actor check that ends it is register_player_collision,
+    // in platform_update. Every test is against the player's bounding box, in gbvm's
+    // unsigned 16-bit subpixels and byte tiles:
+    //   - Across: the step is clamped to MAX_DELTA, then the box's leading edge is tested
+    //     down its height for the face it walks into (moving right meets a tile's LEFT
+    //     face, 0x04; moving left its RIGHT face, 0x08), and stops flush against the
+    //     first. Walking up a slope, the solid tile level with its top does not block.
+    //   - Falling: a slope tile under the box's middle (1 px right of centre) puts the
+    //     feet on its surface, once they reach it, or at once if the player stood on the
+    //     ground last frame (so walking downhill stays on the slope). Otherwise the feet
+    //     land on the first TOP face they cross this frame, unless they started below
+    //     that tile's top, or a drop-through runs and no tile there has a BOTTOM face.
+    //   - Rising: the head stops under the first BOTTOM face.
+    // Returns PLAT_LANDED when the player ends on the ground (plat_grounded) and
+    // PLAT_BUMPED when its head hit a ceiling - what gbvm turns into GROUND / FALL.
+    // gbavm used to test a few points around the origin, as if it were a 16 x 16 sprite's
+    // centre, and knew no slopes: gbs2's hill on Path to Sample Town is slope tiles with
+    // nothing under them, so the player fell through the world there.
     constexpr uint8_t PLAT_LANDED = 0x01;
     constexpr uint8_t PLAT_BUMPED = 0x02;
+    constexpr uint8_t COLLISION_SLOPE = 0x70;      // a tile's slope (or ladder) kind
+    constexpr uint8_t COLLISION_SLOPE_LEFT = 0x10; // the slope rises to the left
+    constexpr uint8_t COLLISION_SLOPE_ANY = 0x60;  // 45 (0x20), 22.5 bottom (0x40) or top (both)
+    inline uint8_t subpx_to_tile(int v) { return uint8_t(uint16_t(v) >> 8); }
+    inline uint16_t tile_to_subpx(int t) { return uint16_t(uint8_t(t) << 8); }
+    uint8_t plat_on_slope = 0; // gbvm's plat_on_slope: the slope tile the player stands on, or 0
+    uint8_t plat_slope_y = 0;  // gbvm's plat_slope_y: that tile's row
     uint8_t plat_move_and_collide(Actor& p)
     {
         uint8_t hit = 0;
-        const int cx_px = p.x >> 5;
+        const uint16_t half_w = uint16_t(p.b_right - p.b_left) >> 1;
+        const uint8_t prev_on_slope = plat_on_slope;
+        plat_on_slope = 0;
+        if(plat_drop_timer != 0) plat_drop_timer--;
         const int dx = plat_clamp_delta(plat_delta_subpx(plat_vel_x));
         const int dy = plat_clamp_delta(plat_delta_subpx(plat_vel_y));
         gba_plat_step_x = (int16_t)dx;
         gba_plat_step_y = (int16_t)dy;
-        int nx = (int)p.x + dx;
-        if(plat_vel_x != 0)
+
         {
-            const int edge_px = (nx >> 5) + (plat_vel_x > 0 ? 8 : -8);
-            const uint8_t face = plat_vel_x > 0 ? 0x04 : 0x08;
-            const int body_py = (int)(p.y >> 5);
-            if((coll_at_px(edge_px, body_py) & face) ||
-               (coll_at_px(edge_px, body_py + 7) & face))
+            const bool right = dx > 0;
+            const int edge = right ? p.b_right + 1 : p.b_left;
+            uint16_t new_x = uint16_t(p.x + dx);
+            const uint8_t tx = subpx_to_tile(new_x + edge);
+            // gbvm skips the wall when it is level with the slope the player was on and
+            // the player is walking up it - its IS_SLOPE_LEFT(t) != moving_right, which
+            // compares the 0x10 bit with 1 and so also holds walking right on a left slope.
+            if(tile_col_test_range_y(right ? 0x04 : 0x08, tx, subpx_to_tile(p.y + p.b_bottom), subpx_to_tile(p.y + p.b_top)) &&
+               !(tile_hit_y == plat_slope_y && (prev_on_slope & COLLISION_SLOPE_ANY) &&
+                 int(prev_on_slope & COLLISION_SLOPE_LEFT) != int(right)))
             {
-                nx = (int)p.x;
+                new_x = uint16_t((right ? tile_to_subpx(tx) : tile_to_subpx(tx + 1)) - edge);
                 plat_vel_x = 0;
             }
+            p.x = new_x;
         }
-        if(nx < 0) nx = 0;
-        p.x = (uint16_t)nx;
 
-        int ny = (int)p.y + dy;
-        if(plat_drop_timer != 0) plat_drop_timer--;
-        if(plat_vel_y > 0)                        // falling: land on TOP faces
+        uint16_t new_y = uint16_t(p.y + dy);
+        const bool prev_grounded = plat_grounded != 0;
+        plat_grounded = prev_on_slope ? 1 : 0; // a frame's grace after leaving a slope
+        const uint8_t tx_start = subpx_to_tile(p.x + p.b_left);
+        const uint8_t tx_end = subpx_to_tile(p.x + p.b_right);
+        if(dy >= 0)
         {
-            // Tunnel guard (M13c): sweep every row the feet cross and land on
-            // the first TOP face, not only the destination row's. A clamped
-            // step is under 4px, so it crosses one tile top at most. While a
-            // drop-through runs, a one-way tile (TOP with no BOTTOM face) is
-            // passed and a solid one still lands, as in gbvm.
-            const int feet_from = ((int)(p.y >> 5) + 8) >> 3;
-            const int feet_to = ((ny >> 5) + 8) >> 3;
-            for(int ty = feet_from; ty <= feet_to; ++ty)
+            const uint16_t y_bottom = uint16_t(new_y + p.b_bottom);
+            const uint8_t new_tile_y = subpx_to_tile(y_bottom);
+            const uint8_t ty_start = uint8_t(subpx_to_tile(p.y + p.b_bottom) - 1);
+            uint8_t ty_end = new_tile_y;
+            // On the ground, look one tile further down for the next slope, so walking
+            // downhill stays on it when gravity alone would not reach that tile.
+            if(prev_grounded && ty_end == uint8_t(ty_start + 1)) ++ty_end;
+            const uint16_t x_mid = uint16_t(p.x + p.b_left + half_w + SUBPX);
+            const uint8_t slope = tile_col_test_range_y(COLLISION_SLOPE_ANY, subpx_to_tile(x_mid), ty_start, ty_end);
+            if(slope)
             {
-                const uint8_t t = coll_at_px(cx_px, ty << 3);
-                if((t & 0x01) && !(plat_drop_timer != 0 && !(t & 0x02)))
+                // The surface's height under x_mid, as an offset from the tile's top.
+                const int xo = x_mid & 0xFF;
+                int offset = 0;
+                switch(slope & COLLISION_SLOPE)
                 {
-                    ny = ((ty << 3) - 8) << 5;    // snap feet to the tile top
-                    plat_vel_y = 0;
-                    plat_drop_timer = 0;
-                    hit |= PLAT_LANDED;
-                    break;
+                case 0x20: offset = (256 - xo) - p.b_bottom; break;        // 45, rising right
+                case 0x40: offset = (256 - (xo >> 1)) - p.b_bottom; break; // 22.5 right, lower half
+                case 0x60: offset = (128 - (xo >> 1)) - p.b_bottom; break; // 22.5 right, upper half
+                case 0x30: offset = xo - p.b_bottom; break;                // 45, rising left
+                case 0x50: offset = (xo >> 1) - p.b_bottom + 128; break;   // 22.5 left, lower half
+                case 0x70: offset = (xo >> 1) - p.b_bottom; break;         // 22.5 left, upper half
+                }
+                const uint16_t slope_y = uint16_t(tile_to_subpx(tile_hit_y) + offset - 1);
+                if(prev_grounded || slope_y <= new_y)
+                {
+                    plat_slope_y = tile_hit_y;
+                    plat_on_slope = slope;
+                    plat_grounded = 1;
+                    if(tile_col_test_range_x(0x02, subpx_to_tile(slope_y + p.b_top), tx_start, tx_end))
+                    {
+                        // A ceiling where the slope would lift the head: take the step back.
+                        plat_vel_y = 0;
+                        plat_vel_x = 0;
+                        p.x = uint16_t(p.x - dx);
+                    }
+                    else
+                    {
+                        p.y = slope_y;
+                        plat_vel_y = 0;
+                        plat_drop_timer = 0;
+                    }
+                    return hit | PLAT_LANDED;
                 }
             }
-        }
-        else if(plat_vel_y < 0)                   // rising: bump on BOTTOM faces
-        {
-            const int head_px = (ny >> 5) - 8;
-            if(coll_at_px(cx_px, head_px) & 0x02)
+            // Feet already deeper into a tile than this frame's step started below its
+            // top, so they fall on through it.
+            const bool below_top = !prev_on_slope && (y_bottom & 0xFF) > (uint16_t(dy) & 0xFF);
+            if(!below_top && tile_col_test_range_x(0x01, new_tile_y, tx_start, tx_end) &&
+               !(plat_drop_timer != 0 && !tile_col_test_range_x(0x02, new_tile_y, tx_start, tx_end)))
             {
-                ny = (int)p.y;
+                new_y = uint16_t(tile_to_subpx(tile_hit_y) - p.b_bottom - 1);
                 plat_vel_y = 0;
-                hit |= PLAT_BUMPED;
+                plat_drop_timer = 0;
+                plat_grounded = 1;
             }
+            if(plat_grounded) hit |= PLAT_LANDED;
         }
-        if(ny < 0) { ny = 0; if(plat_vel_y < 0) plat_vel_y = 0; }
-        p.y = (uint16_t)ny;
+        else if(tile_col_test_range_x(0x02, subpx_to_tile(new_y + p.b_top), tx_start, tx_end))
+        {
+            new_y = uint16_t(tile_to_subpx(tile_hit_y + 1) - p.b_top + 1);
+            plat_vel_y = 0;
+            plat_coyote_timer = 0;
+            hit |= PLAT_BUMPED;
+        }
+        p.y = new_y;
         return hit;
     }
 
@@ -1518,9 +1627,6 @@ namespace
             if(plat_vel_x != 0) p.moving = true;
         }
 
-        // Body sample points: actor pos is the sprite centre in 32/px
-        // subpixels; the body spans ~16px, so feet = +8px, head = -8px.
-        const int cx_px = p.x >> 5;
         const bool jump_held = k_a_held();
         const bool jump_pressed = k_a_pressed();
         const uint8_t enter_state = plat_state;   // jumps decided on the entering state
@@ -1538,21 +1644,11 @@ namespace
             else
             {
                 plat_jump_buffer_timer = 0;
-                if(!(coll_at_px(cx_px, (int)(p.y >> 5) + 8) & 0x01))
-                {
-                    plat_state = 0;               // walked off a ledge -> FALL
-                }
-                else if(plat_drop_through_active && k_down_held())
-                {
-                    // Drop-through (M13c): only one-way tiles (TOP, no other
-                    // solid faces).
-                    const uint8_t footing = coll_at_px(cx_px, (int)(p.y >> 5) + 8);
-                    if((footing & 0x0f) == 0x01)
-                    {
-                        plat_state = 0;
-                        plat_drop_timer = 15;     // gbvm's DROP_FRAMES_MAX
-                    }
-                }
+                // Drop-through (M13c): down starts gbvm's drop timer, and
+                // plat_move_and_collide then lets the feet pass only if no tile
+                // under them has a BOTTOM face (one-way platforms).
+                if(plat_drop_through_active && k_down_held())
+                    plat_drop_timer = 15;         // gbvm's DROP_FRAMES_MAX
             }
         }
         else if(enter_state == 0 || enter_state == 2) // airborne: FALL / JUMP
@@ -1593,7 +1689,14 @@ namespace
             else plat_hold_timer = 0;
             if(plat_vel_y >= 0) plat_state = 0;   // apex -> FALL
         }
-        if(plat_state != 1)                       // airborne gravity
+        if(plat_state == 1)
+        {
+            // gbs2 G5: gbvm's ground update pulls the player down every frame and
+            // queues FALL; plat_move_and_collide puts it back on the ground (or on
+            // the next slope downhill), or it walked off a ledge.
+            plat_vel_y = (int16_t)(plat_vel_y + plat_grav);
+        }
+        else                                      // airborne gravity
         {
             const int g = (jump_held && plat_vel_y < 0) ? plat_hold_grav : plat_grav;
             int vy = plat_vel_y + g;
@@ -1602,6 +1705,7 @@ namespace
         }
 
         if(plat_move_and_collide(p) & PLAT_LANDED) plat_state = 1; // land -> GROUND
+        else if(plat_state == 1) plat_state = 0;                    // nothing underfoot -> FALL
     }
 
     void platform_update()
@@ -1644,6 +1748,10 @@ namespace
         plat_vel_x = plat_vel_y = 0;
         plat_knockback_timer = 0;
         plat_anim_dirty = false;
+        // gbvm leaves these from the last scene; a new scene has no slope under the player.
+        plat_grounded = 0;
+        plat_on_slope = 0;
+        plat_slope_y = 0;
     }
 }
 
@@ -1759,31 +1867,20 @@ namespace
         return ((p.x | p.y) & 0xFF) == 0;
     }
 
-    // A tile's collision byte; outside the scene counts as every edge solid.
-    uint8_t tile_bits(int tx, int ty)
-    {
-        if(tx < 0 || ty < 0 || tx >= coll_w || ty >= coll_h) return 0x0F;
-        return collisions ? collisions[ty * coll_w + tx] : 0;
-    }
-
-    // gbvm's tile_col_test_range_y / _x: walk the column (row) range from its first tile
-    // to its last; the first tile with a bit of `mask` set is a hit, its row (column) in
-    // *hit. Off the scene counts as every bit, so a scan running off an edge hits there.
+    // gbvm's tile_col_test_range_y / _x (defined with the platformer), as a yes or no with
+    // the hit's row (column) in *hit. Tiles are bytes, as in gbvm, so a range starting
+    // just off the scene's top or left edge starts at tile 255, off the scene.
     bool col_range_y(uint8_t mask, int tx, int ty0, int ty1, int* hit = nullptr)
     {
-        for(int ty = ty0; ; ty += ty0 < ty1 ? 1 : -1)
-        {
-            if(tile_bits(tx, ty) & mask) { if(hit) *hit = ty; return true; }
-            if(ty == ty1) return false;
-        }
+        if(!tile_col_test_range_y(mask, uint8_t(tx), uint8_t(ty0), uint8_t(ty1))) return false;
+        if(hit) *hit = tile_hit_y;
+        return true;
     }
     bool col_range_x(uint8_t mask, int ty, int tx0, int tx1, int* hit = nullptr)
     {
-        for(int tx = tx0; ; tx += tx0 < tx1 ? 1 : -1)
-        {
-            if(tile_bits(tx, ty) & mask) { if(hit) *hit = tx; return true; }
-            if(tx == tx1) return false;
-        }
+        if(!tile_col_test_range_x(mask, uint8_t(ty), uint8_t(tx0), uint8_t(tx1))) return false;
+        if(hit) *hit = tile_hit_x;
+        return true;
     }
 
     // gbs2 G5: gbvm's check_collision_horizontal / _vertical (vm_actor.c). Clip a move of
