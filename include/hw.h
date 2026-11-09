@@ -35,10 +35,11 @@ void hw_bg_set_angle(int angle); // M8d: set the affine bg rotation only (keeps 
 void hw_bg_set_scale(int scale_percent); // M8d: set the affine bg scale only (percent)
 void hw_user_code(int idx); // M8e: run the author's Custom Code (C++) snippet idx
 // Replace Tile (matrix slice B): overwrite the PIXEL DATA of the background tile
-// currently shown at map cell (x, y) with tile `startIdx` from project tileset
+// currently shown at scene tile (x, y) with tile `startIdx` from project tileset
 // `tilesetIdx`. Mirrors GB Studio's vm_replace_tile_xy, which likewise rewrites
 // the tile's graphics rather than the map cell - so every cell using that tile
-// changes together, which is what makes animated tiles work.
+// changes together, which is what makes animated tiles work. (x, y) count from
+// the scene's top-left, not the padded map's.
 void hw_replace_bg_tile_xy(int x, int y, int tilesetIdx, int startIdx);
 // Set the loaded scene's collision grid (one byte/tile, row-major). Movement is
 // blocked into any tile whose low nibble is non-zero, and outside the grid bounds.

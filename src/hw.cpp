@@ -1850,7 +1850,7 @@ void hw_user_code(int idx)
     gba_user_run(idx);
 }
 
-// Replace Tile: overwrite the pixel data of the bg tile shown at map cell
+// Replace Tile: overwrite the pixel data of the bg tile shown at scene tile
 // (x, y) with tile `startIdx` from project tileset `tilesetIdx`.
 //
 // GB Studio rewrites the TILE'S GRAPHICS, not the map cell (vm_replace_tile_xy
@@ -1867,16 +1867,35 @@ void hw_replace_bg_tile_xy(int x, int y, int tilesetIdx, int startIdx)
     const bn::tile* tiles = gba_tileset_tiles(tilesetIdx, &tileCount);
     if(!tiles || startIdx < 0 || startIdx >= tileCount) return;
 
-    // Which tile slot is that map cell showing?
+    // Which tile slot is that scene tile showing?
     const bn::regular_bg_map_ptr map = scene_bg->map();
     const bn::optional<bn::span<const bn::regular_bg_map_cell>> cells = map.cells_ref();
     if(!cells) return; // a map we do not own the cells of (should not happen)
 
+    // GB's x, y are scene tiles (gbvm reads its scene image at y * width + x), but
+    // the map is padded to a multiple of 32 tiles with the scene centred on it,
+    // rounded down onto the tile grid (the eject's bgCanvasLayout). So the scene's
+    // top-left sits half the padding in, floored, on each axis. Outside the scene
+    // is padding, whose backdrop tile is not the script's to change.
     const int w = map.dimensions().width();
     const int h = map.dimensions().height();
-    if(x < 0 || y < 0 || x >= w || y >= h) return;
+    const int scene_tw = scene_w_px / 8;
+    const int scene_th = scene_h_px / 8;
+    if(x < 0 || y < 0 || x >= scene_tw || y >= scene_th) return;
+    const int mx = x + (w > scene_tw ? (w - scene_tw) / 2 : 0);
+    const int my = y + (h > scene_th ? (h - scene_th) / 2 : 0);
+    if(mx >= w || my >= h) return;
 
-    const bn::regular_bg_map_cell_info info((*cells)[y * w + x]);
+    // A big map (over 512 px) and a 32 x 32 one store their cells row by row. The
+    // others (64 x 32, 32 x 64, 64 x 64) keep the hardware's layout: 32 x 32
+    // screenblocks, row by row (bn::regular_bg_map_item::cell_index).
+    int cell = my * w + mx;
+    if(!map.big() && (w != 32 || h != 32))
+    {
+        cell = ((my / 32) * (w / 32) + mx / 32) * 1024 + (my % 32) * 32 + mx % 32;
+    }
+
+    const bn::regular_bg_map_cell_info info((*cells)[cell]);
     bn::regular_bg_tiles_ptr bgTiles = scene_bg->tiles();
 
     // Butano ASSERTS on an out-of-range destination, and an assert halts the
